@@ -1,1 +1,9 @@
+# Models
+models/*
+!models/.keep
+
+# Virtual environments
+.venv/
+
+# Environment variables
 .env

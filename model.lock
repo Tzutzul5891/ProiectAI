@@ -1,0 +1,4 @@
+# Official local LLM configuration
+repo_id = "bartowski/Llama-3.2-3B-Instruct-GGUF"
+filename = "Llama-3.2-3B-Instruct-Q4_K_M.gguf"
+sha256 = ""

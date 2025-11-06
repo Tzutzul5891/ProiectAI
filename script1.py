@@ -7,14 +7,68 @@ on computer science topics.
 """
 
 import random
+import subprocess
+import sys
 import time
-from typing import Dict, Any, List, Optional
-import asyncio
-import httpx
-import json
-import os
 from pathlib import Path
-from dotenv import load_dotenv
+from typing import Dict, Any, List, Optional, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from llama_cpp import Llama
+
+try:
+    from llama_cpp import Llama as LlamaClient  # type: ignore
+except ImportError:  # pragma: no cover
+    LlamaClient = None  # type: ignore
+ROOT = Path(__file__).resolve().parent
+MODELS_DIR = ROOT / "models"
+LLAMA_INSTANCE: Optional["Llama"] = None  # type: ignore[name-defined]
+
+# --- LOCAL MODEL MANAGEMENT ---
+def ensure_model() -> None:
+    """
+    Make sure there is at least one GGUF file under models/.
+    If none exist, run the downloader script defined in scripts/get_model.py.
+    """
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    if any(MODELS_DIR.glob("*.gguf")):
+        return
+
+    downloader = ROOT / "scripts" / "get_model.py"
+    if not downloader.exists():
+        raise FileNotFoundError("Model downloader script missing at scripts/get_model.py.")
+
+    print("No local model detected. Downloading according to model.lock ...")
+    subprocess.check_call([sys.executable, str(downloader)])
+
+
+def get_model_path() -> Path:
+    files = sorted(MODELS_DIR.glob("*.gguf"))
+    if not files:
+        raise FileNotFoundError("No GGUF model present under models/.")
+    return files[0]
+
+
+def init_llama() -> Optional["Llama"]:
+    if LlamaClient is None:
+        print("[LLM Warning] llama-cpp-python is not available; falling back to template questions.")
+        return None
+    try:
+        ensure_model()
+        model_path = get_model_path()
+        print(f"[LLM] Loading local model from {model_path} ...")
+        return LlamaClient(model_path=str(model_path), n_ctx=2048, n_threads=4)
+    except Exception as exc:
+        print(f"[LLM Warning] Failed to initialize local model: {exc}")
+        return None
+
+
+def get_llama() -> Optional["Llama"]:
+    global LLAMA_INSTANCE
+    if LLAMA_INSTANCE is not None:
+        return LLAMA_INSTANCE
+    LLAMA_INSTANCE = init_llama()
+    return LLAMA_INSTANCE
 
 # --- 1. THE KNOWLEDGE GRAPH (KG) ---
 # Defines the core problems and their factual properties.
@@ -220,85 +274,80 @@ SEMANTIC_LINKS: Dict[str, Dict[str, float]] = {
 }
 
 
-# --- 3. AI SIMULATION (QUESTION GENERATION) ---
-async def generate_question_text_with_ai(user_prompt: str, system_prompt: str, max_retries=3, base_delay=1) -> str:
+# --- 3. LOCAL QUESTION GENERATION ---
+QUESTION_TEMPLATES: Dict[str, List[str]] = {
+    "Type": [
+        "In what category of problems does {problem} belong?",
+        "How would you classify {problem} conceptually?",
+        "Describe the nature of {problem} from a CS theory viewpoint."
+    ],
+    "Solutions": [
+        "Name a technique that can solve {problem}.",
+        "Which algorithmic strategy would you apply to tackle {problem}?",
+        "Give one go-to method for addressing {problem}."
+    ],
+    "Complexity": [
+        "What complexity do we typically associate with {problem}?",
+        "Roughly how expensive is it to solve {problem}?",
+        "State the asymptotic runtime usually cited for {problem}."
+    ]
+}
+
+
+def generate_question_with_llama(problem_name: str, property_key: str, concept: str) -> Optional[str]:
     """
-    Calls the Gemini API to creatively generate a question.
-    Implements exponential backoff for network robustness.
+    Use the local llama.cpp model to craft a creative question. Falls back to
+    None if the model is unavailable.
     """
-    print(f"\n[AI Call] Calling Gemini API to generate creative question...")
+    llama = get_llama()
+    if llama is None:
+        return None
 
-    # NOTE: In a real-world app, API key management is crucial.
-    # Load API key from environment; if a local .env exists, use python-dotenv to load it.
-    # This avoids hardcoding a secret in the source.
-    env_path = Path(__file__).parent / ".env"
-    if env_path.exists():
-        try:
-            load_dotenv(env_path)
-        except Exception:
-            # If python-dotenv isn't available for some reason, we silently continue
-            # since os.getenv will still work if the environment was set externally.
-            pass
+    property_guidance = {
+        "Type": "Ask explicitly for the classification/category/type of the problem.",
+        "Solutions": "Ask for an algorithmic technique or strategy that solves the problem.",
+        "Complexity": "Ask for the time complexity / asymptotic runtime and mention the word 'complexity'."
+    }.get(property_key, "Ask for information matching the property key.")
 
-    apiKey = os.getenv("GEMINI_API_KEY", "")
+    prompt = (
+        "You are a witty CS professor writing exam questions.\n"
+        f"Problem: {problem_name}\n"
+        f"Target property: {property_key}\n"
+        f"Expected concept: {concept}\n"
+        f"Guidance: {property_guidance}\n"
+        "Write exactly one self-contained question whose correct answer is the expected concept. "
+        "The question must explicitly ask the student to NAME or DESCRIBE the concept (never yes/no). "
+        "Keep it under 2 sentences.\n"
+        "Question:\n"
+    )
+    try:
+        response = llama(  # type: ignore[misc]
+            prompt,
+            max_tokens=128,
+            temperature=0.75,
+            stop=["\n\n", "Question:", "Answer:"]
+        )
+        text = response["choices"][0]["text"].strip()
+        return text or None
+    except Exception as exc:  # pragma: no cover
+        print(f"[LLM Warning] Local model generation failed: {exc}")
+        return None
 
-    apiUrl = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key={apiKey}"
 
-    payload = {
-        "contents": [{"parts": [{"text": user_prompt}]}],
-        "systemInstruction": {
-            "parts": [{"text": system_prompt}]
-        },
-        "generationConfig": {
-            "temperature": 0.8,  # Increase creativity
-            "topK": 40,
-            "topP": 0.95,
-            "maxOutputTokens": 250,  # <-- INCREASED FROM 100
-        }
-    }
+def generate_question_text(problem_name: str, property_key: str, concept: str) -> str:
+    """
+    Generate a readable question either via the local LLM or, if unavailable,
+    via deterministic templates.
+    """
+    llm_question = generate_question_with_llama(problem_name, property_key, concept)
+    if llm_question:
+        return llm_question
 
-    headers = {'Content-Type': 'application/json'}
+    templates = QUESTION_TEMPLATES.get(property_key)
+    if templates:
+        return random.choice(templates).format(problem=problem_name, concept=concept)
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        for attempt in range(max_retries):
-            try:
-                response = await client.post(apiUrl, headers=headers, data=json.dumps(payload))
-
-                if response.status_code == 200:
-                    result = response.json()
-                    candidate = result.get('candidates', [{}])[0]
-                    text_part = candidate.get('content', {}).get('parts', [{}])[0]
-                    generated_text = text_part.get('text')
-
-                    if generated_text:
-                        # Clean up the text, remove potential quotes
-                        cleaned_text = generated_text.strip().strip('\"')
-                        # --- ADDED ---
-                        # Also remove LaTeX-style delimiters for clean terminal output
-                        cleaned_text = cleaned_text.replace("$", "")
-                        return cleaned_text
-                    else:
-                        print(f"[AI Error] No text in response: {result}")
-
-                else:
-                    print(f"[AI Error] API call failed with status {response.status_code}: {response.text}")
-
-            except httpx.RequestError as e:
-                print(f"[AI Error] Network request failed: {e}")
-            except json.JSONDecodeError:
-                print(f"[AI Error] Failed to decode API response: {response.text}")
-            except Exception as e:
-                print(f"[AI Error] An unexpected error occurred: {e}")
-
-            if attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                print(f"Retrying in {delay:.2f} seconds...")
-                await asyncio.sleep(delay)
-
-    # Fallback if all retries fail
-    print("[AI Warning] API call failed. Using fallback template.")
-    # We still need a valid question
-    return f"What is a key concept related to the problem's {user_prompt}?"
+    return f"What is the {property_key.lower()} of {problem_name}, ideally touching on {concept}?"
 
 
 # --- 4. AI SIMULATION (ANSWER PARSING) ---
@@ -374,39 +423,27 @@ def simulate_ai_semantic_match(user_answer: str, valid_concepts: List[str]) -> O
 
 
 # --- 5. QUESTION GENERATION ---
-async def generate_question(problem_name: str, property_key: str) -> Dict[str, str]:
+def generate_question(problem_name: str, property_key: str) -> Dict[str, Any]:
     """
-    Generates a question by getting a creative question from the AI.
+    Generates a question using the local LLM (with template fallback).
     """
     problem_data = KNOWLEDGE_GRAPH[problem_name]
+    expected_concepts = problem_data[property_key]  # Could be list or str
 
-    expected_concepts_list = problem_data[property_key]  # This is a list or a string
-
-    # We still need a single concept for the AI simulation prompt
-    sim_prompt_concept = ""
-    if isinstance(expected_concepts_list, list):
-        if not expected_concepts_list:  # Handle empty list
-            return generate_question()  # Try again
-        sim_prompt_concept = random.choice(expected_concepts_list)
+    if isinstance(expected_concepts, list):
+        if not expected_concepts:
+            raise ValueError(f"No expected concepts configured for {problem_name} -> {property_key}.")
+        sim_prompt_concept = random.choice(expected_concepts)
     else:
-        sim_prompt_concept = expected_concepts_list  # It's a string
+        sim_prompt_concept = expected_concepts
 
-    system_prompt = (
-        "You are a witty, creative university professor setting an exam. "
-        "Your goal is to ask a clever, single-concept question based on the user's prompt, "
-        "but *without* just repeating the prompt. "
-        "Be creative. Re-phrase the topic in an interesting way. "
-        "Respond with *only* the question text."
-    )
-    user_prompt = f"Topic: The '{property_key}' of the '{problem_name}' problem. (The expected answer concept is '{sim_prompt_concept}')."
-
-    ai_generated_question = await generate_question_text_with_ai(user_prompt, system_prompt)
+    question_text = generate_question_text(problem_name, property_key, sim_prompt_concept)
 
     return {
         "problem": problem_name,
         "property_key": property_key,
-        "expected_concepts": expected_concepts_list,  # Pass the full list (or string)
-        "question": ai_generated_question
+        "expected_concepts": expected_concepts,
+        "question": question_text
     }
 
 
@@ -509,7 +546,7 @@ def grade_answer(question_data: Dict[str, str], user_answer: str) -> Dict[str, A
 
 
 # --- 7. INTERACTIVE TERMINAL LOOP ---
-async def main():
+def main():
     """
     Runs an INTERACTIVE loop to allow the user to answer
     randomly generated questions.
@@ -553,7 +590,7 @@ async def main():
             problem_name, property_key = available_questions[q_index]
 
             # 2. Generate the question text
-            q_data = await generate_question(problem_name, property_key)
+            q_data = generate_question(problem_name, property_key)
 
             print(f"Problem: {q_data['problem']} | Property: {q_data['property_key']}")
             print("-" * 50)
@@ -590,6 +627,6 @@ async def main():
 # only when the script is executed directly (not imported).
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        main()
     except (EOFError, KeyboardInterrupt):
         print("\nExiting.")
