@@ -103,7 +103,8 @@ def create_pdf(problem_type, requirement, matrix_data, filename="subiect.pdf", h
         pdf.set_font("Courier", size=10)
         
         if not matrix_data or len(matrix_data) == 0:
-            return pdf.output(dest='S').encode('latin-1')
+            val = pdf.output(dest='S')
+            return bytes(val) if isinstance(val, (bytes, bytearray)) else val.encode('latin-1')
 
         # Calculate effective page width (page width minus margins)
         effective_width = pdf.w - 2 * pdf.l_margin
@@ -124,4 +125,5 @@ def create_pdf(problem_type, requirement, matrix_data, filename="subiect.pdf", h
     pdf.cell(0, 10, clean_text("Spatiu pentru rezolvare:"), ln=True)
     pdf.rect(x=10, y=pdf.get_y(), w=190, h=100)
 
-    return pdf.output(dest='S').encode('latin-1')
+    val = pdf.output(dest='S')
+    return bytes(val) if isinstance(val, (bytes, bytearray)) else val.encode('latin-1')

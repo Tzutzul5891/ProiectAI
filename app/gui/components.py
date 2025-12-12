@@ -404,7 +404,6 @@ def check_knights_tour_validity(board, start_pos):
         summary = f"Turul are {len(errors)} eroare/erori:"
         return False, summary, detailed_feedback, invalid_moves_count
 
-
 def render_interactive_hanoi(num_disks, num_pegs, initial_state, key_prefix="hanoi"):
     """
     Renders an interactive Tower of Hanoi puzzle.
@@ -413,14 +412,18 @@ def render_interactive_hanoi(num_disks, num_pegs, initial_state, key_prefix="han
     pegs_key = f"{key_prefix}_pegs"
     moves_key = f"{key_prefix}_moves"
     selected_key = f"{key_prefix}_selected"
+    size_key = f"{key_prefix}_num_pegs"
     
     peg_names = ["A", "B", "C", "D"][:num_pegs]
     
-    # Initialize state
-    if pegs_key not in st.session_state:
+    if (pegs_key not in st.session_state or 
+        size_key not in st.session_state or 
+        st.session_state[size_key] != num_pegs):
+        
         st.session_state[pegs_key] = {i: initial_state[i].copy() for i in range(num_pegs)}
         st.session_state[moves_key] = []
         st.session_state[selected_key] = None
+        st.session_state[size_key] = num_pegs
     
     st.markdown("### 🗼 Turnurile din Hanoi - Interactiv")
     st.markdown(f"**Instrucțiuni:** Mută discurile de pe tija **{peg_names[0]}** pe tija **{peg_names[-1]}**")
@@ -485,6 +488,7 @@ def render_interactive_hanoi(num_disks, num_pegs, initial_state, key_prefix="han
             st.session_state[pegs_key] = {i: initial_state[i].copy() for i in range(num_pegs)}
             st.session_state[moves_key] = []
             st.session_state[selected_key] = None
+            st.session_state[size_key] = num_pegs
             st.rerun()
     
     with col2:
@@ -492,7 +496,6 @@ def render_interactive_hanoi(num_disks, num_pegs, initial_state, key_prefix="han
         st.info(f"🔢 {moves_count} mișcări")
     
     return st.session_state[moves_key], st.session_state[pegs_key]
-
 
 def hanoi_moves_to_text(moves, num_pegs):
     """Convert Hanoi moves to text description"""
@@ -553,3 +556,78 @@ def check_hanoi_validity(moves, pegs_state, num_disks, num_pegs, target_peg, opt
         detailed_feedback.append(f"📊 Ai efectuat {user_moves} mișcări până acum.")
         detailed_feedback.append(f"🎯 Continuă să muți discurile pe tija {peg_names[target_peg]}.")
         return False, False, "⏳ Puzzle incomplet", detailed_feedback, 0
+
+def render_interactive_graph_coloring(adj_matrix, key_prefix="gc"):
+    """
+    Renders inputs for selecting colors for each graph node.
+    Returns a dictionary of {node_index: color_name}.
+    """
+    n = len(adj_matrix)
+    colors = ["Roșu", "Verde", "Albastru", "Galben", "Portocaliu", "Mov"]
+    
+    st.markdown("### 🎨 Problema de Colorare a Grafului")
+    st.markdown("**Instrucțiuni:** Atribuie o culoare fiecărui nod astfel încât nodurile conectate (adiacente) să aibă culori diferite.")
+    
+    edges_desc = []
+    for i in range(n):
+        neighbors = [str(j) for j in range(n) if adj_matrix[i][j] == 1]
+        if neighbors:
+            edges_desc.append(f"**Nod {i}** este conectat cu: {', '.join(neighbors)}")
+    
+    with st.expander("🔗 Vezi Conexiunile (Muchii)", expanded=True):
+        for desc in edges_desc:
+            st.markdown(f"- {desc}")
+    
+    st.markdown("---")
+    st.markdown("#### Selectează Culorile:")
+    
+    user_colors = {}
+    cols = st.columns(3)
+    
+    for i in range(n):
+        with cols[i % 3]:
+            user_colors[i] = st.selectbox(
+                f"Culoare Nod {i}",
+                options=colors,
+                key=f"{key_prefix}_node_{i}",
+                index=0
+            )
+            
+    return user_colors
+
+def check_graph_coloring_validity(adj_matrix, user_colors, min_colors):
+    """
+    Verifică dacă colorarea este validă și calculează scorul pe o scară de la 0 la 100.
+    """
+    n = len(adj_matrix)
+    errors = []
+    detailed_feedback = []
+
+    conflict_found = False
+    for i in range(n):
+        for j in range(i + 1, n):
+            if adj_matrix[i][j] == 1:  # Dacă există muchie
+                c1 = user_colors.get(i)
+                c2 = user_colors.get(j)
+                
+                if c1 is not None and c2 is not None and c1 == c2:
+                    conflict_found = True
+                    color_name = c1
+                    errors.append(f"Conflict între Nod {i} și Nod {j} (ambele sunt {color_name})")
+                    detailed_feedback.append(f"❌ Nodul {i} și Nodul {j} au aceeași culoare ({color_name}).")
+    
+    valid_colors = [c for c in user_colors.values() if c is not None]
+    used_colors_count = len(set(valid_colors))
+
+    if conflict_found:
+        summary = f"Soluția are {len(errors)} conflicte."
+        return False, summary, detailed_feedback, 0.0
+    
+    if used_colors_count <= min_colors:
+        msg = f"✅ Soluție Perfectă! Ai colorat graful corect cu numărul minim de culori ({used_colors_count})."
+        detailed_feedback.append(f"✨ Excelent! Ai atins numărul cromatic ({min_colors}).")
+        return True, msg, detailed_feedback, 100.0
+    else:
+        msg = f"⚠️ Valid, dar nu optim. Ai folosit {used_colors_count} culori, dar se putea cu {min_colors}."
+        detailed_feedback.append(f"💡 Încearcă să folosești mai puține culori pentru punctaj maxim.")
+        return True, msg, detailed_feedback, 50.0

@@ -231,3 +231,73 @@ class NQueensProblem:
             return empty_board, self.explanation
         else:
             return [], "Eroare la generare."
+        
+class GraphColoringProblem:
+    def __init__(self):
+        self.matrix = None
+        self.explanation = ""
+        self.min_colors = 0
+        self.solution_colors = []
+        # Colors available for the interface/solution
+        self.available_colors = ["Roșu", "Verde", "Albastru", "Galben", "Portocaliu", "Mov"]
+
+    def is_safe(self, node, color_index, graph, c_arr):
+        """Check if assigning color_index to node is valid"""
+        for neighbor in range(len(graph)):
+            if graph[node][neighbor] == 1 and c_arr[neighbor] == color_index:
+                return False
+        return True
+
+    def graph_coloring_util(self, graph, m, c_arr, node):
+        """Backtracking utility"""
+        if node == len(graph):
+            return True
+            
+        for c in range(1, m + 1):
+            if self.is_safe(node, c, graph, c_arr):
+                c_arr[node] = c
+                if self.graph_coloring_util(graph, m, c_arr, node + 1):
+                    return True
+                c_arr[node] = 0
+        return False
+
+    def solve_graph_coloring(self, num_nodes):
+        """Finds the chromatic number (min colors)"""
+        # Try finding solution for m = 1 to num_nodes
+        for m in range(1, num_nodes + 1):
+            c_arr = [0] * num_nodes
+            if self.graph_coloring_util(self.matrix, m, c_arr, 0):
+                self.min_colors = m
+                self.solution_colors = c_arr
+                return
+
+    def generate_problem(self):
+        # Generate 4 to 6 nodes
+        n = random.randint(4, 6)
+        
+        # Create random adjacency matrix
+        self.matrix = [[0] * n for _ in range(n)]
+        
+        # Randomly connect nodes (60% chance of edge)
+        # Ensure at least some edges exist
+        edges_count = 0
+        while edges_count < n - 1:
+            self.matrix = [[0] * n for _ in range(n)]
+            edges_count = 0
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if random.random() > 0.4: 
+                        self.matrix[i][j] = 1
+                        self.matrix[j][i] = 1
+                        edges_count += 1
+        
+        # Solve internally to get the explanation
+        self.solve_graph_coloring(n)
+        
+        sol_named = [self.available_colors[c-1] for c in self.solution_colors]
+        
+        self.explanation = f"Graful cu {n} noduri are numărul cromatic {self.min_colors}. "
+        self.explanation += "Regulă: Două noduri conectate printr-o muchie (1 în matrice) nu pot avea aceeași culoare. "
+        self.explanation += f"O soluție posibilă: {', '.join([f'Nod {i}: {sol_named[i]}' for i in range(n)])}."
+        
+        return self.matrix, self.explanation
