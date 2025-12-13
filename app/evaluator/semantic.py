@@ -1,13 +1,24 @@
 import streamlit as st
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 import re
 
 @st.cache_resource
-def load_model():
-    return SentenceTransformer('all-MiniLM-L6-v2')
+def load_model(model_name_or_path: str, local_files_only: bool) -> SentenceTransformer:
+    return SentenceTransformer(model_name_or_path, local_files_only=local_files_only)
 
 def evaluate_semantic(user_text, correct_text):
+    try:
+        from config import CONFIG
+
+        model_name_or_path = CONFIG.sbert_model_name_or_path
+        local_only = CONFIG.local_models_only
+    except Exception:
+        model_name_or_path = "all-MiniLM-L6-v2"
+        local_only = False
+
+    user_text = user_text or ""
+    correct_text = correct_text or ""
+
     matches = re.findall(r"L\d+-C\d+", correct_text)
     
     found_coordinates = False
@@ -19,10 +30,18 @@ def evaluate_semantic(user_text, correct_text):
     else:
         found_coordinates = True
 
-    model = load_model()
-    embeddings = model.encode([user_text, correct_text])
-    similarity = cosine_similarity([embeddings[0]], [embeddings[1]])[0][0]
-    semantic_score = round(similarity * 100, 2)
+    # Prefer local SBERT; if unavailable (e.g., offline, missing cache), fall back
+    # to a deterministic lexical similarity.
+    try:
+        model = load_model(model_name_or_path, local_only)
+        embeddings = model.encode([user_text, correct_text], normalize_embeddings=True)
+        similarity = float(embeddings[0] @ embeddings[1])
+        semantic_score = round(similarity * 100, 2)
+    except Exception:
+        from difflib import SequenceMatcher
+
+        ratio = SequenceMatcher(None, user_text.lower(), correct_text.lower()).ratio()
+        semantic_score = round(ratio * 100, 2)
     
     if not found_coordinates and "L" in correct_text:
         final_score = min(semantic_score, 40)

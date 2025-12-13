@@ -1,14 +1,25 @@
 import streamlit as st
 import pandas as pd
+from dataclasses import replace
 import sys
 import os
 
 sys.path.append(os.getcwd())
 
 try:
+    from config import CONFIG
+    from app.utils.helpers import set_global_seed
+
+    set_global_seed(CONFIG.seed)
+except Exception:
+    # Config is optional; app should still start without it.
+    pass
+
+try:
     from app.modules.games import NashGame
     from app.modules.search import NQueensProblem, KnightsTourProblem, TowerOfHanoiProblem
     from app.evaluator.semantic import evaluate_semantic
+    from app.models import TestSession
     from app.utils.pdf_generator import create_pdf
     from app.gui.components import (render_interactive_queens_board, board_to_text, check_queens_validity,
                                      render_interactive_knights_board, knights_board_to_text, check_knights_tour_validity,
@@ -42,6 +53,7 @@ with st.sidebar:
         - **Evaluare:** Model SBERT + Regex.
         """
     )
+    debug_mode = st.checkbox("🔧 Debug (arată `Question`/`TestSession`)", value=False)
 
 if 'problem_type' not in st.session_state:
     st.session_state.problem_type = None
@@ -51,6 +63,8 @@ if st.session_state.problem_type != problem_type:
     st.session_state.matrix = None
     st.session_state.correct_expl = ""
     st.session_state.user_feedback = ""
+    st.session_state.question = None
+    st.session_state.test_session = TestSession()
     
     if problem_type == "Jocuri (Echilibru Nash)":
         st.session_state.game = NashGame()
@@ -68,34 +82,88 @@ with col_left:
     
     if st.button("🎲 Generează Întrebare Nouă", use_container_width=True):
         with st.spinner("Se rulează algoritmul generator..."):
-            data, explanation = st.session_state.game.generate_problem()
-            st.session_state.matrix = data
-            st.session_state.correct_expl = explanation
-            st.session_state.user_feedback = ""
-        st.success("Problemă generată cu succes!")
+            try:
+                question = st.session_state.game.generate_question(ui_label=problem_type)
+            except Exception as e:
+                st.session_state.matrix = None
+                st.session_state.correct_expl = ""
+                st.session_state.user_feedback = ""
+                st.session_state.question = None
+                st.session_state.test_session = TestSession()
+                st.error(f"Nu s-a putut genera problema: {e}")
+            else:
+                if not question.data:
+                    st.session_state.matrix = None
+                    st.session_state.correct_expl = ""
+                    st.session_state.user_feedback = ""
+                    st.session_state.question = None
+                    st.session_state.test_session = TestSession()
+                    st.error(f"Nu s-a putut genera problema: {question.correct_explanation or 'Eroare la generare.'}")
+                else:
+                    # Keep prompts consistent with the existing single-question UX/PDF wording.
+                    if problem_type == "Jocuri (Echilibru Nash)":
+                        prompt_text = (
+                            "Se da matricea de plati de mai jos. Identificati daca exista un Echilibru Nash pur si "
+                            "specificati coordonatele (ex: L1-C1)."
+                        )
+                    elif problem_type == "Căutare (N-Queens)":
+                        board_size = len(question.data)
+                        prompt_text = (
+                            f"Pe tabla de {board_size}x{board_size} de mai jos, propuneti o configurare pentru regine "
+                            "astfel incat sa nu se atace reciproc (pe linii, coloane sau diagonale)."
+                        )
+                    elif problem_type == "Căutare (Turul Calului)":
+                        board_size = len(question.data)
+                        prompt_text = (
+                            f"Pe tabla de {board_size}x{board_size} de mai jos, creati un tur al calului care viziteaza "
+                            "fiecare casuta exact o singura data. Calul se misca in forma de 'L'."
+                        )
+                    else:  # Tower of Hanoi
+                        num_disks = question.metadata.get("num_disks", st.session_state.game.num_disks)
+                        num_pegs = question.metadata.get("num_pegs", st.session_state.game.num_pegs)
+                        peg_names = ["A", "B", "C", "D"][:num_pegs]
+                        prompt_text = (
+                            f"Turnurile din Hanoi: Mutati toate cele {num_disks} discuri de pe tija {peg_names[0]} pe "
+                            f"tija {peg_names[-1]}, respectand regulile (un disc mai mare nu poate fi plasat peste unul mai mic)."
+                        )
+
+                    question = replace(question, prompt_text=prompt_text)
+                    st.session_state.question = question
+                    st.session_state.test_session = TestSession(questions=[question], current_index=0)
+                    st.session_state.matrix = question.data
+                    st.session_state.correct_expl = question.correct_explanation
+                    st.session_state.user_feedback = ""
+                    st.success("Problemă generată cu succes!")
 
     if st.session_state.matrix:
         st.write("---")
         st.write("📄 **Opțiuni Export:**")
+
+        question = st.session_state.get("question")
         
-        if problem_type == "Jocuri (Echilibru Nash)":
-            pdf_req = "Se da matricea de plati de mai jos. Identificati daca exista un Echilibru Nash pur si specificati coordonatele (ex: L1-C1)."
-        elif problem_type == "Căutare (N-Queens)":
-            board_size = len(st.session_state.matrix)
-            pdf_req = f"Pe tabla de {board_size}x{board_size} de mai jos, propuneti o configurare pentru regine astfel incat sa nu se atace reciproc (pe linii, coloane sau diagonale)."
-        elif problem_type == "Căutare (Turul Calului)":
-            board_size = len(st.session_state.matrix)
-            pdf_req = f"Pe tabla de {board_size}x{board_size} de mai jos, creati un tur al calului care viziteaza fiecare casuta exact o singura data. Calul se misca in forma de 'L'."
-        else:  # Tower of Hanoi
-            num_disks = st.session_state.game.num_disks
-            num_pegs = st.session_state.game.num_pegs
-            peg_names = ["A", "B", "C", "D"][:num_pegs]
-            pdf_req = f"Turnurile din Hanoi: Mutati toate cele {num_disks} discuri de pe tija {peg_names[0]} pe tija {peg_names[-1]}, respectand regulile (un disc mai mare nu poate fi plasat peste unul mai mic)."
+        pdf_req = getattr(question, "prompt_text", "") if question else ""
+        if not pdf_req:
+            if problem_type == "Jocuri (Echilibru Nash)":
+                pdf_req = "Se da matricea de plati de mai jos. Identificati daca exista un Echilibru Nash pur si specificati coordonatele (ex: L1-C1)."
+            elif problem_type == "Căutare (N-Queens)":
+                board_size = len(st.session_state.matrix)
+                pdf_req = f"Pe tabla de {board_size}x{board_size} de mai jos, propuneti o configurare pentru regine astfel incat sa nu se atace reciproc (pe linii, coloane sau diagonale)."
+            elif problem_type == "Căutare (Turul Calului)":
+                board_size = len(st.session_state.matrix)
+                pdf_req = f"Pe tabla de {board_size}x{board_size} de mai jos, creati un tur al calului care viziteaza fiecare casuta exact o singura data. Calul se misca in forma de 'L'."
+            else:  # Tower of Hanoi
+                num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
+                num_pegs = (question.metadata.get("num_pegs") if question else None) or st.session_state.game.num_pegs
+                peg_names = ["A", "B", "C", "D"][:num_pegs]
+                pdf_req = (
+                    f"Turnurile din Hanoi: Mutati toate cele {num_disks} discuri de pe tija {peg_names[0]} pe tija {peg_names[-1]}, "
+                    "respectand regulile (un disc mai mare nu poate fi plasat peste unul mai mic)."
+                )
 
         try:
             # For Tower of Hanoi, pass the initial state
             if problem_type == "Căutare (Turnurile Hanoi)":
-                hanoi_state = st.session_state.game.initial_state
+                hanoi_state = (question.metadata.get("initial_state") if question else None) or st.session_state.game.initial_state
                 pdf_bytes = create_pdf(problem_type, pdf_req, st.session_state.matrix, hanoi_state=hanoi_state)
             else:
                 pdf_bytes = create_pdf(problem_type, pdf_req, st.session_state.matrix)
@@ -114,6 +182,7 @@ with col_right:
     st.subheader("2. Vizualizare și Răspuns")
     
     if st.session_state.matrix:
+        question = st.session_state.get("question")
         if problem_type == "Jocuri (Echilibru Nash)":
             st.markdown("### Cerință:")
             st.write("Se dă matricea de plăți de mai jos. **Identifică dacă există un Echilibru Nash pur** și specifică coordonatele.")
@@ -148,7 +217,7 @@ with col_right:
         elif problem_type == "Căutare (Turul Calului)":
             # Get the board size and starting position
             board_size = len(st.session_state.matrix)
-            start_pos = st.session_state.game.start_pos
+            start_pos = (question.metadata.get("start_pos") if question else None) or st.session_state.game.start_pos
             
             st.markdown("### Cerință:")
             st.write(f"Pe tabla de **{board_size}x{board_size}** de mai jos, creează un tur al calului care vizitează fiecare căsuță exact o dată.")
@@ -167,9 +236,9 @@ with col_right:
                 st.write(user_answer)
         
         else:  # Tower of Hanoi
-            num_disks = st.session_state.game.num_disks
-            num_pegs = st.session_state.game.num_pegs
-            initial_state = st.session_state.game.initial_state
+            num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
+            num_pegs = (question.metadata.get("num_pegs") if question else None) or st.session_state.game.num_pegs
+            initial_state = (question.metadata.get("initial_state") if question else None) or st.session_state.game.initial_state
             peg_names = ["A", "B", "C", "D"][:num_pegs]
             
             st.markdown("### Cerință:")
@@ -216,7 +285,7 @@ with col_right:
             # N-Queens verification
             if st.button("✅ Verifică Răspunsul", type="primary"):
                 # Get expected number of queens
-                expected_queens = st.session_state.game.expected_queens
+                expected_queens = (question.metadata.get("expected_queens") if question else None) or st.session_state.game.expected_queens
                 
                 # Check validity with detailed feedback
                 is_valid, validity_msg, detailed_feedback = check_queens_validity(user_board, expected_queens)
@@ -265,8 +334,8 @@ with col_right:
             # Knight's Tour verification
             if st.button("✅ Verifică Răspunsul", type="primary"):
                 # Get starting position and solution
-                start_pos = st.session_state.game.start_pos
-                solution_board = st.session_state.game.solution_path
+                start_pos = (question.metadata.get("start_pos") if question else None) or st.session_state.game.start_pos
+                solution_board = (getattr(question, "correct_answer", None) if question else None) or st.session_state.game.solution_path
                 
                 # Check validity with detailed feedback
                 is_valid, validity_msg, detailed_feedback, invalid_moves = check_knights_tour_validity(user_board, start_pos)
@@ -336,10 +405,10 @@ with col_right:
         
         else:  # Tower of Hanoi verification
             if st.button("✅ Verifică Răspunsul", type="primary"):
-                num_disks = st.session_state.game.num_disks
-                num_pegs = st.session_state.game.num_pegs
+                num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
+                num_pegs = (question.metadata.get("num_pegs") if question else None) or st.session_state.game.num_pegs
                 target_peg = num_pegs - 1
-                solution_moves = st.session_state.game.solution_moves
+                solution_moves = (getattr(question, "correct_answer", None) if question else None) or st.session_state.game.solution_moves
                 optimal_length = len(solution_moves)
                 
                 # Check validity
@@ -401,3 +470,22 @@ with col_right:
                                 st.text(move)
     else:
         st.info("👈 Apasă pe butonul 'Generează Întrebare Nouă' din stânga pentru a începe.")
+
+if debug_mode:
+    question = st.session_state.get("question")
+    st.markdown("---")
+    with st.expander("🔧 Debug: `Question` / `TestSession`", expanded=True):
+        if not question:
+            st.info("Nu există încă o întrebare generată (`st.session_state.question` e None).")
+        else:
+            st.write("**Question (dict complet):**")
+            st.json(question.to_dict(include_answer_key=True))
+            st.write("**Question (fără answer key):**")
+            st.json(question.to_public_dict())
+            st.write("**Answer key (doar cheie):**")
+            st.json(question.to_answer_key_dict())
+
+        st.write("**TestSession.export_test():**")
+        st.json(st.session_state.test_session.export_test())
+        st.write("**TestSession.export_answer_key():**")
+        st.json(st.session_state.test_session.export_answer_key())
