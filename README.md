@@ -9,6 +9,8 @@ SmarTest este o aplicație locală pentru generare de probleme tip examen și ev
   - **Căutare:** N-Queens, Turul Calului (5x5/6x6), Turnurile din Hanoi (3/4 tije, 3–5 discuri) (`app/modules/search.py`).
 - **UI Streamlit (interactiv):**
   - tablă interactivă N-Queens, Turul Calului și Turnurile din Hanoi (`app/gui/components.py`).
+- **Mod Test (multi-întrebări):**
+  - selectezi capitole/subiecte + N întrebări, navighezi între ele și poți exporta PDF separat pentru test vs answer key (`main.py`, `app/utils/pdf_generator.py`).
 - **Evaluare (local/determinist):**
   - Nash: scor semantic pe explicație + verificare coordonate (regex) (`app/evaluator/semantic.py`).
   - N-Queens: validare exactă a configurației + scor parțial.

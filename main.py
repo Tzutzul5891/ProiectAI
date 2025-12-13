@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from dataclasses import replace
+import random
 import sys
 import os
 
@@ -20,13 +21,292 @@ try:
     from app.modules.search import NQueensProblem, KnightsTourProblem, TowerOfHanoiProblem
     from app.evaluator.semantic import evaluate_semantic
     from app.models import TestSession
-    from app.utils.pdf_generator import create_pdf
+    from app.utils.pdf_generator import create_pdf, create_test_pdf
     from app.gui.components import (render_interactive_queens_board, board_to_text, check_queens_validity,
                                      render_interactive_knights_board, knights_board_to_text, check_knights_tour_validity,
                                      render_interactive_hanoi, hanoi_moves_to_text, check_hanoi_validity)
 except ImportError as e:
     st.error(f"Eroare la importuri: {e}. Verifică dacă ai creat toate fișierele!")
     st.stop()
+
+UI_LABEL_NASH = "Jocuri (Echilibru Nash)"
+UI_LABEL_NQUEENS = "Căutare (N-Queens)"
+UI_LABEL_KNIGHTS = "Căutare (Turul Calului)"
+UI_LABEL_HANOI = "Căutare (Turnurile Hanoi)"
+
+
+def build_prompt_text(ui_label: str, *, data, metadata: dict, fallback_game=None) -> str:
+    """Keep prompts consistent with existing single-question UX/PDF wording."""
+
+    if ui_label == UI_LABEL_NASH:
+        return (
+            "Se da matricea de plati de mai jos. Identificati daca exista un Echilibru Nash pur si "
+            "specificati coordonatele (ex: L1-C1)."
+        )
+
+    if ui_label == UI_LABEL_NQUEENS:
+        board_size = len(data) if data else 0
+        return (
+            f"Pe tabla de {board_size}x{board_size} de mai jos, propuneti o configurare pentru regine "
+            "astfel incat sa nu se atace reciproc (pe linii, coloane sau diagonale)."
+        )
+
+    if ui_label == UI_LABEL_KNIGHTS:
+        board_size = len(data) if data else 0
+        return (
+            f"Pe tabla de {board_size}x{board_size} de mai jos, creati un tur al calului care viziteaza "
+            "fiecare casuta exact o singura data. Calul se misca in forma de 'L'."
+        )
+
+    if ui_label == UI_LABEL_HANOI:
+        num_disks = metadata.get("num_disks") or getattr(fallback_game, "num_disks", None) or "?"
+        num_pegs = metadata.get("num_pegs") or getattr(fallback_game, "num_pegs", None) or 3
+        peg_names = ["A", "B", "C", "D"][: int(num_pegs)]
+        return (
+            f"Turnurile din Hanoi: Mutati toate cele {num_disks} discuri de pe tija {peg_names[0]} pe "
+            f"tija {peg_names[-1]}, respectand regulile (un disc mai mare nu poate fi plasat peste unul mai mic)."
+        )
+
+    return ""
+
+
+TEST_TOPIC_REGISTRY = {
+    "Nash (Echilibru Nash 2x2)": {
+        "chapter": "Games",
+        "ui_label": UI_LABEL_NASH,
+        "factory": NashGame,
+    },
+    "N-Queens": {
+        "chapter": "Search",
+        "ui_label": UI_LABEL_NQUEENS,
+        "factory": NQueensProblem,
+    },
+    "Turul Calului": {
+        "chapter": "Search",
+        "ui_label": UI_LABEL_KNIGHTS,
+        "factory": KnightsTourProblem,
+    },
+    "Turnurile Hanoi": {
+        "chapter": "Search",
+        "ui_label": UI_LABEL_HANOI,
+        "factory": TowerOfHanoiProblem,
+    },
+}
+
+def is_test_answered(question, answer) -> bool:
+    ui_label = (question.metadata or {}).get("ui_label") or question.type
+
+    if ui_label == UI_LABEL_NASH:
+        if isinstance(answer, str):
+            return bool(answer.strip())
+        return bool(str(answer).strip()) if answer is not None else False
+
+    if ui_label == UI_LABEL_NQUEENS:
+        if isinstance(answer, dict):
+            board = answer.get("board")
+        else:
+            board = None
+        if not board:
+            return False
+        return any(any(bool(cell) for cell in row) for row in board)
+
+    if ui_label == UI_LABEL_KNIGHTS:
+        if isinstance(answer, dict):
+            board = answer.get("board")
+        else:
+            board = None
+        if not board:
+            return False
+        # Consider answered if user placed at least one move beyond the start (0).
+        return any(cell > 0 for row in board for cell in row)
+
+    if ui_label == UI_LABEL_HANOI:
+        if isinstance(answer, dict):
+            moves = answer.get("moves") or []
+        else:
+            moves = []
+        return len(moves) > 0
+
+    return bool(answer)
+
+
+def evaluate_test_question(question, answer) -> tuple[float, str, dict]:
+    """Return (score, message, details) for a test question attempt."""
+
+    ui_label = (question.metadata or {}).get("ui_label") or question.type
+
+    if ui_label == UI_LABEL_NASH:
+        user_text = ""
+        if isinstance(answer, str):
+            user_text = answer
+        elif isinstance(answer, dict):
+            user_text = str(answer.get("text") or "")
+
+        if not user_text.strip():
+            return 0.0, "Necompletat.", {}
+
+        score, feedback = evaluate_semantic(user_text, question.correct_explanation)
+        return float(score), str(feedback), {}
+
+    if ui_label == UI_LABEL_NQUEENS:
+        board = answer.get("board") if isinstance(answer, dict) else None
+        if not board:
+            return 0.0, "Necompletat.", {}
+
+        expected_queens = (question.metadata or {}).get("expected_queens") or len(board)
+        is_valid, validity_msg, detailed_feedback = check_queens_validity(board, expected_queens)
+
+        if is_valid:
+            return 100.0, str(validity_msg), {"details": detailed_feedback}
+
+        queen_count = sum(sum(bool(cell) for cell in row) for row in board)
+        partial_score = 0.0
+        if queen_count == expected_queens:
+            partial_score += 30
+        elif abs(queen_count - expected_queens) <= 2:
+            partial_score += 15
+
+        semantic_score, _ = evaluate_semantic(board_to_text(board), question.correct_explanation)
+        partial_score += min(float(semantic_score) * 0.2, 20.0)
+
+        return float(partial_score), str(validity_msg), {"details": detailed_feedback}
+
+    if ui_label == UI_LABEL_KNIGHTS:
+        board = answer.get("board") if isinstance(answer, dict) else None
+        if not board:
+            return 0.0, "Necompletat.", {}
+
+        start_pos = (question.metadata or {}).get("start_pos") or (0, 0)
+        solution_board = question.correct_answer
+
+        is_valid, validity_msg, detailed_feedback, _invalid_moves = check_knights_tour_validity(board, start_pos)
+        from app.gui.components import compute_knights_tour_score
+
+        ai_score, metrics = compute_knights_tour_score(board, solution_board, start_pos)
+        score = 100.0 if is_valid else float(ai_score)
+        return score, str(validity_msg), {"details": detailed_feedback, "metrics": metrics}
+
+    if ui_label == UI_LABEL_HANOI:
+        if not isinstance(answer, dict):
+            return 0.0, "Necompletat.", {}
+
+        moves = answer.get("moves") or []
+        pegs_state = answer.get("pegs_state") or {}
+
+        if len(moves) == 0:
+            return 0.0, "Necompletat.", {}
+
+        num_disks = (question.metadata or {}).get("num_disks") or 0
+        num_pegs = (question.metadata or {}).get("num_pegs") or 3
+        target_peg = int(num_pegs) - 1
+        solution_moves = question.correct_answer or []
+        optimal_length = len(solution_moves)
+
+        is_complete, is_optimal, validity_msg, detailed_feedback, efficiency = check_hanoi_validity(
+            moves, pegs_state, num_disks, num_pegs, target_peg, optimal_length
+        )
+
+        if not is_complete:
+            return 0.0, str(validity_msg), {"details": detailed_feedback, "efficiency": efficiency}
+
+        if is_optimal:
+            return 100.0, str(validity_msg), {"details": detailed_feedback, "efficiency": 1.0}
+
+        score = 50.0 + (float(efficiency) * 50.0)
+        return float(score), str(validity_msg), {"details": detailed_feedback, "efficiency": efficiency}
+
+    return 0.0, "Tip de întrebare necunoscut.", {}
+
+
+def render_debug_panel() -> None:
+    question = st.session_state.get("question")
+    st.markdown("---")
+    with st.expander("🔧 Debug: `Question` / `TestSession`", expanded=True):
+        if not question:
+            st.info("Nu există încă o întrebare generată (`st.session_state.question` e None).")
+        else:
+            st.write("**Question (dict complet):**")
+            st.json(question.to_dict(include_answer_key=True))
+            st.write("**Question (fără answer key):**")
+            st.json(question.to_public_dict())
+            st.write("**Answer key (doar cheie):**")
+            st.json(question.to_answer_key_dict())
+
+        st.write("**TestSession.export_test():**")
+        st.json(st.session_state.test_session.export_test())
+        st.write("**TestSession.export_answer_key():**")
+        st.json(st.session_state.test_session.export_answer_key())
+
+
+def render_test_results(session: TestSession) -> None:
+    st.subheader("✅ Rezultate Test")
+
+    total = len(session.questions)
+    answered = sum(1 for q in session.questions if is_test_answered(q, session.user_answers.get(q.id)))
+
+    results_rows = []
+    total_score = 0.0
+    for idx, q in enumerate(session.questions, start=1):
+        topic = (q.metadata or {}).get("topic") or (q.metadata or {}).get("ui_label") or q.type
+        answer = session.user_answers.get(q.id)
+        attempted = is_test_answered(q, answer)
+        score, message, _details = evaluate_test_question(q, answer if attempted else None)
+        session.scores[q.id] = float(score)
+        total_score += float(score)
+        results_rows.append(
+            {
+                "#": idx,
+                "Subiect": topic,
+                "Completat": "da" if attempted else "nu",
+                "Scor": round(float(score), 2),
+                "Feedback": message,
+            }
+        )
+
+    st.session_state.test_session = session
+    avg_score = (total_score / total) if total > 0 else 0.0
+    st.info(f"Răspunsuri completate: {answered}/{total} • Scor mediu: {avg_score:.2f}%")
+
+    col_back, col_pdf_test, col_pdf_key = st.columns([1, 1, 1])
+    with col_back:
+        if st.button("⬅️ Înapoi la întrebări", key="test_back_to_questions"):
+            st.session_state.test_view = "questions"
+            st.rerun()
+    with col_pdf_test:
+        if st.session_state.get("test_pdf_bytes"):
+            st.download_button(
+                "⬇️ Descarcă Test (PDF)",
+                data=st.session_state["test_pdf_bytes"],
+                file_name="test_ia.pdf",
+                mime="application/pdf",
+                key="dl_test_pdf_results",
+                use_container_width=True,
+            )
+    with col_pdf_key:
+        if st.session_state.get("answer_key_pdf_bytes"):
+            st.download_button(
+                "⬇️ Descarcă Answer Key (PDF)",
+                data=st.session_state["answer_key_pdf_bytes"],
+                file_name="answer_key_ia.pdf",
+                mime="application/pdf",
+                key="dl_answer_key_pdf_results",
+                use_container_width=True,
+            )
+
+    st.dataframe(pd.DataFrame(results_rows), use_container_width=True, hide_index=True)
+
+    show_key = st.checkbox("Arată și answer key în aplicație", value=False, key="show_answer_key_in_app")
+    if show_key:
+        for idx, q in enumerate(session.questions, start=1):
+            topic = (q.metadata or {}).get("topic") or (q.metadata or {}).get("ui_label") or q.type
+            with st.expander(f"Întrebarea {idx}: {topic}"):
+                st.write(q.prompt_text)
+                st.markdown("**Răspunsul tău:**")
+                st.write(session.user_answers.get(q.id, ""))
+                st.markdown("**Răspuns corect:**")
+                st.write(q.correct_answer)
+                st.markdown("**Explicație:**")
+                st.write(q.correct_explanation)
 
 st.set_page_config(
     page_title="SmarTest - Proiect IA",
@@ -40,10 +320,86 @@ st.markdown("---")
 
 with st.sidebar:
     st.header("⚙️ Configurare")
-    problem_type = st.radio(
-        "Alege Tipul Problemei:",
-        ("Jocuri (Echilibru Nash)", "Căutare (N-Queens)", "Căutare (Turul Calului)", "Căutare (Turnurile Hanoi)")
-    )
+    app_mode = st.radio("Mod:", ("O singură întrebare", "Test (N întrebări)"), key="app_mode_select")
+
+    generate_test_clicked = False
+    selected_test_topics: list[str] = []
+    test_num_questions = 0
+    test_seed = 42
+
+    if app_mode == "O singură întrebare":
+        problem_type = st.radio(
+            "Alege Tipul Problemei:",
+            (UI_LABEL_NASH, UI_LABEL_NQUEENS, UI_LABEL_KNIGHTS, UI_LABEL_HANOI),
+            key="single_problem_type",
+        )
+    else:
+        st.markdown("### 🧪 Configurare Test")
+        selected_chapters = st.multiselect(
+            "Capitole:",
+            ("Search", "Games", "CSP", "Adversarial"),
+            default=("Search", "Games"),
+            key="test_chapters",
+        )
+
+        if any(ch in ("CSP", "Adversarial") for ch in selected_chapters):
+            st.caption("CSP/Adversarial nu sunt implementate încă; sunt ignorate la generare.")
+
+        available_topics = [
+            name for name, cfg in TEST_TOPIC_REGISTRY.items() if cfg["chapter"] in set(selected_chapters)
+        ]
+        selected_test_topics = st.multiselect(
+            "Subiecte:",
+            options=available_topics,
+            default=available_topics,
+            key="test_topics",
+        )
+
+        test_num_questions = st.slider(
+            "Număr întrebări:",
+            min_value=3,
+            max_value=10,
+            value=3,
+            step=1,
+            key="test_num_questions",
+        )
+
+        try:
+            default_seed = CONFIG.seed if CONFIG.seed is not None else 42
+        except Exception:
+            default_seed = 42
+        test_seed = int(
+            st.number_input(
+                "Seed (random controlat):",
+                min_value=0,
+                max_value=1_000_000_000,
+                value=int(default_seed),
+                step=1,
+                key="test_seed",
+            )
+        )
+
+        generate_test_clicked = st.button("🧪 Generează Test", use_container_width=True)
+
+        if st.session_state.get("test_pdf_bytes"):
+            st.download_button(
+                "⬇️ Descarcă Test (PDF)",
+                data=st.session_state["test_pdf_bytes"],
+                file_name="test_ia.pdf",
+                mime="application/pdf",
+                key="dl_test_pdf_sidebar",
+                use_container_width=True,
+            )
+
+        if st.session_state.get("answer_key_pdf_bytes"):
+            st.download_button(
+                "⬇️ Descarcă Answer Key (PDF)",
+                data=st.session_state["answer_key_pdf_bytes"],
+                file_name="answer_key_ia.pdf",
+                mime="application/pdf",
+                key="dl_answer_key_pdf_sidebar",
+                use_container_width=True,
+            )
     
     st.info(
         """
@@ -54,6 +410,246 @@ with st.sidebar:
         """
     )
     debug_mode = st.checkbox("🔧 Debug (arată `Question`/`TestSession`)", value=False)
+
+if "app_mode" not in st.session_state:
+    st.session_state.app_mode = None
+
+if st.session_state.app_mode != app_mode:
+    st.session_state.app_mode = app_mode
+    st.session_state.matrix = None
+    st.session_state.correct_expl = ""
+    st.session_state.user_feedback = ""
+    st.session_state.question = None
+    st.session_state.test_session = TestSession()
+    st.session_state.test_pdf_bytes = None
+    st.session_state.answer_key_pdf_bytes = None
+    st.session_state.test_view = "questions"
+
+if app_mode == "Test (N întrebări)":
+    if "test_session" not in st.session_state:
+        st.session_state.test_session = TestSession()
+    if "test_view" not in st.session_state:
+        st.session_state.test_view = "questions"
+
+    if generate_test_clicked:
+        st.session_state.test_pdf_bytes = None
+        st.session_state.answer_key_pdf_bytes = None
+        st.session_state.test_generation_errors = []
+        st.session_state.test_view = "questions"
+
+        if not selected_test_topics:
+            st.error("Selectează cel puțin un subiect pentru test.")
+        else:
+            with st.spinner("Se generează testul..."):
+                try:
+                    from app.utils.helpers import set_global_seed
+
+                    set_global_seed(test_seed)
+                except Exception:
+                    random.seed(test_seed)
+
+                rng = random.Random(test_seed)
+                if test_num_questions <= len(selected_test_topics):
+                    planned_topics = rng.sample(selected_test_topics, k=test_num_questions)
+                else:
+                    planned_topics = [rng.choice(selected_test_topics) for _ in range(test_num_questions)]
+
+                questions = []
+                errors = []
+                attempts_by_index: dict[int, int] = {}
+                attempts = 0
+                max_attempts = test_num_questions * 5
+
+                while len(questions) < test_num_questions and attempts < max_attempts:
+                    q_index = len(questions) + 1
+                    attempt_no = attempts_by_index.get(q_index, 0) + 1
+                    attempts_by_index[q_index] = attempt_no
+
+                    if attempt_no == 1:
+                        topic_name = planned_topics[q_index - 1]
+                    else:
+                        topic_name = rng.choice(selected_test_topics)
+
+                    cfg = TEST_TOPIC_REGISTRY[topic_name]
+                    gen = cfg["factory"]()
+                    try:
+                        q = gen.generate_question(
+                            ui_label=cfg["ui_label"],
+                            chapter=cfg["chapter"],
+                            extra_metadata={"topic": topic_name, "seed": test_seed, "index": q_index, "attempt": attempt_no},
+                        )
+                        if not q.data:
+                            raise ValueError("generator returned empty data")
+                        prompt_text = build_prompt_text(
+                            cfg["ui_label"],
+                            data=q.data,
+                            metadata=q.metadata,
+                            fallback_game=gen,
+                        )
+                        if prompt_text:
+                            q = replace(q, prompt_text=prompt_text)
+                        questions.append(q)
+                    except Exception as e:
+                        errors.append(f"Q{q_index} ({topic_name}, incercarea {attempt_no}): {e}")
+                    finally:
+                        attempts += 1
+
+                st.session_state.test_generation_errors = errors
+                st.session_state.test_session = TestSession(questions=questions, current_index=0)
+                st.session_state.question = st.session_state.test_session.current_question
+
+                if questions:
+                    st.session_state.test_pdf_bytes = create_test_pdf(questions, include_answer_key=False)
+                    st.session_state.answer_key_pdf_bytes = create_test_pdf(questions, include_answer_key=True)
+
+    st.subheader("🧪 Modul Test")
+
+    col_pdf_test, col_pdf_key = st.columns(2)
+    with col_pdf_test:
+        if st.session_state.get("test_pdf_bytes"):
+            st.download_button(
+                "⬇️ Descarcă Test (PDF)",
+                data=st.session_state["test_pdf_bytes"],
+                file_name="test_ia.pdf",
+                mime="application/pdf",
+                key="dl_test_pdf_main",
+                use_container_width=True,
+            )
+    with col_pdf_key:
+        if st.session_state.get("answer_key_pdf_bytes"):
+            st.download_button(
+                "⬇️ Descarcă Answer Key (PDF)",
+                data=st.session_state["answer_key_pdf_bytes"],
+                file_name="answer_key_ia.pdf",
+                mime="application/pdf",
+                key="dl_answer_key_pdf_main",
+                use_container_width=True,
+            )
+
+    session = st.session_state.test_session
+    if not session.questions:
+        st.info("Configurează testul în sidebar și apasă „Generează Test”.")
+    else:
+        if st.session_state.test_view == "results":
+            render_test_results(session)
+            if debug_mode:
+                render_debug_panel()
+            st.stop()
+
+        current = session.current_question
+        st.session_state.question = current
+
+        st.markdown(f"### Întrebarea {session.current_index + 1}/{len(session.questions)}")
+        st.write(current.prompt_text)
+
+        ui_label = (current.metadata or {}).get("ui_label") or current.type
+        if ui_label == UI_LABEL_NASH:
+            df_display = pd.DataFrame(
+                current.data,
+                index=["Linia 1", "Linia 2"],
+                columns=["Coloana 1", "Coloana 2"],
+            )
+            st.table(df_display)
+        elif ui_label == UI_LABEL_HANOI:
+            initial_state = (current.metadata or {}).get("initial_state")
+            if initial_state:
+                st.write("Stare inițială (tije):")
+                peg_names = ["A", "B", "C", "D"][: len(initial_state)]
+                cols = st.columns(len(initial_state))
+                for peg_idx in range(len(initial_state)):
+                    with cols[peg_idx]:
+                        st.write(f"Tija {peg_names[peg_idx]}")
+                        st.write(initial_state.get(peg_idx, []))
+            else:
+                st.write(current.data)
+        else:
+            try:
+                df_board = pd.DataFrame(current.data)
+                st.dataframe(df_board, use_container_width=True)
+            except Exception:
+                st.write(current.data)
+
+        answer_key = f"test_answer_{current.id}"
+        if answer_key not in st.session_state:
+            st.session_state[answer_key] = session.user_answers.get(current.id, "")
+
+        ui_label = (current.metadata or {}).get("ui_label") or current.type
+
+        if ui_label == UI_LABEL_NASH:
+            user_answer = st.text_area("✍️ Răspunsul tău:", key=answer_key, height=140)
+            session.user_answers[current.id] = user_answer
+
+        elif ui_label == UI_LABEL_NQUEENS:
+            board_size = (current.metadata or {}).get("n") or len(current.data)
+            user_board = render_interactive_queens_board(n=board_size, key_prefix=f"test_{current.id}_nqueens")
+            user_text = board_to_text(user_board)
+            with st.expander("📝 Vezi reprezentarea text a plasării tale"):
+                st.write(user_text)
+            session.user_answers[current.id] = {"board": user_board, "text": user_text}
+
+        elif ui_label == UI_LABEL_KNIGHTS:
+            board_size = (current.metadata or {}).get("n") or len(current.data)
+            start_pos = (current.metadata or {}).get("start_pos") or (0, 0)
+            user_board = render_interactive_knights_board(
+                n=board_size, start_pos=start_pos, key_prefix=f"test_{current.id}_knights"
+            )
+            user_text = knights_board_to_text(user_board, start_pos)
+            with st.expander("📝 Vezi reprezentarea text a traseului tău"):
+                st.write(user_text)
+            session.user_answers[current.id] = {"board": user_board, "text": user_text}
+
+        elif ui_label == UI_LABEL_HANOI:
+            num_disks = (current.metadata or {}).get("num_disks")
+            num_pegs = (current.metadata or {}).get("num_pegs")
+            initial_state = (current.metadata or {}).get("initial_state")
+            if num_disks is None or num_pegs is None or initial_state is None:
+                st.error("Date lipsă pentru Turnurile din Hanoi.")
+            else:
+                user_moves, pegs_state = render_interactive_hanoi(
+                    num_disks, num_pegs, initial_state, key_prefix=f"test_{current.id}_hanoi"
+                )
+                user_text = hanoi_moves_to_text(user_moves, num_pegs)
+                with st.expander("📝 Vezi lista mișcărilor tale"):
+                    st.write(user_text)
+                session.user_answers[current.id] = {
+                    "moves": user_moves,
+                    "pegs_state": pegs_state,
+                    "text": user_text,
+                }
+        else:
+            user_answer = st.text_area("✍️ Răspunsul tău:", key=answer_key, height=140)
+            session.user_answers[current.id] = user_answer
+
+        st.session_state.test_session = session
+
+        col_prev, col_next, col_finish, col_progress = st.columns([1, 1, 1, 2])
+        with col_prev:
+            if st.button("⬅️ Întrebarea anterioară", disabled=session.current_index <= 0):
+                session.current_index -= 1
+                st.session_state.test_session = session
+                st.rerun()
+        with col_next:
+            if st.button("Întrebarea următoare ➡️", disabled=session.current_index >= len(session.questions) - 1):
+                session.current_index += 1
+                st.session_state.test_session = session
+                st.rerun()
+        with col_finish:
+            finish_disabled = len(session.questions) == 0
+            if st.button("✅ Finalizează testul", type="primary", disabled=finish_disabled, key="finish_test"):
+                st.session_state.test_view = "results"
+                st.rerun()
+        with col_progress:
+            answered = sum(1 for q in session.questions if is_test_answered(q, session.user_answers.get(q.id)))
+            st.info(f"Răspunsuri completate: {answered}/{len(session.questions)}")
+
+        if st.session_state.get("test_generation_errors"):
+            with st.expander("⚠️ Probleme la generare (detalii)"):
+                for err in st.session_state.test_generation_errors:
+                    st.write(f"- {err}")
+
+    if debug_mode:
+        render_debug_panel()
+    st.stop()
 
 if 'problem_type' not in st.session_state:
     st.session_state.problem_type = None
@@ -100,34 +696,14 @@ with col_left:
                     st.session_state.test_session = TestSession()
                     st.error(f"Nu s-a putut genera problema: {question.correct_explanation or 'Eroare la generare.'}")
                 else:
-                    # Keep prompts consistent with the existing single-question UX/PDF wording.
-                    if problem_type == "Jocuri (Echilibru Nash)":
-                        prompt_text = (
-                            "Se da matricea de plati de mai jos. Identificati daca exista un Echilibru Nash pur si "
-                            "specificati coordonatele (ex: L1-C1)."
-                        )
-                    elif problem_type == "Căutare (N-Queens)":
-                        board_size = len(question.data)
-                        prompt_text = (
-                            f"Pe tabla de {board_size}x{board_size} de mai jos, propuneti o configurare pentru regine "
-                            "astfel incat sa nu se atace reciproc (pe linii, coloane sau diagonale)."
-                        )
-                    elif problem_type == "Căutare (Turul Calului)":
-                        board_size = len(question.data)
-                        prompt_text = (
-                            f"Pe tabla de {board_size}x{board_size} de mai jos, creati un tur al calului care viziteaza "
-                            "fiecare casuta exact o singura data. Calul se misca in forma de 'L'."
-                        )
-                    else:  # Tower of Hanoi
-                        num_disks = question.metadata.get("num_disks", st.session_state.game.num_disks)
-                        num_pegs = question.metadata.get("num_pegs", st.session_state.game.num_pegs)
-                        peg_names = ["A", "B", "C", "D"][:num_pegs]
-                        prompt_text = (
-                            f"Turnurile din Hanoi: Mutati toate cele {num_disks} discuri de pe tija {peg_names[0]} pe "
-                            f"tija {peg_names[-1]}, respectand regulile (un disc mai mare nu poate fi plasat peste unul mai mic)."
-                        )
-
-                    question = replace(question, prompt_text=prompt_text)
+                    prompt_text = build_prompt_text(
+                        problem_type,
+                        data=question.data,
+                        metadata=question.metadata,
+                        fallback_game=st.session_state.game,
+                    )
+                    if prompt_text:
+                        question = replace(question, prompt_text=prompt_text)
                     st.session_state.question = question
                     st.session_state.test_session = TestSession(questions=[question], current_index=0)
                     st.session_state.matrix = question.data
@@ -173,6 +749,7 @@ with col_left:
                 data=pdf_bytes,
                 file_name="subiect_examen_ia.pdf",
                 mime="application/pdf",
+                key="dl_single_question_pdf",
                 use_container_width=True
             )
         except Exception as e:
@@ -472,20 +1049,4 @@ with col_right:
         st.info("👈 Apasă pe butonul 'Generează Întrebare Nouă' din stânga pentru a începe.")
 
 if debug_mode:
-    question = st.session_state.get("question")
-    st.markdown("---")
-    with st.expander("🔧 Debug: `Question` / `TestSession`", expanded=True):
-        if not question:
-            st.info("Nu există încă o întrebare generată (`st.session_state.question` e None).")
-        else:
-            st.write("**Question (dict complet):**")
-            st.json(question.to_dict(include_answer_key=True))
-            st.write("**Question (fără answer key):**")
-            st.json(question.to_public_dict())
-            st.write("**Answer key (doar cheie):**")
-            st.json(question.to_answer_key_dict())
-
-        st.write("**TestSession.export_test():**")
-        st.json(st.session_state.test_session.export_test())
-        st.write("**TestSession.export_answer_key():**")
-        st.json(st.session_state.test_session.export_answer_key())
+    render_debug_panel()
