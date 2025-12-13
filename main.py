@@ -19,12 +19,14 @@ except Exception:
 try:
     from app.modules.games import NashGame
     from app.modules.search import NQueensProblem, KnightsTourProblem, TowerOfHanoiProblem
+    from app.modules.graph_coloring import GraphColoringProblem, parse_coloring_text, evaluate_graph_coloring
     from app.evaluator.semantic import evaluate_semantic
     from app.models import TestSession
     from app.utils.pdf_generator import create_pdf, create_test_pdf
     from app.gui.components import (render_interactive_queens_board, board_to_text, check_queens_validity,
                                      render_interactive_knights_board, knights_board_to_text, check_knights_tour_validity,
-                                     render_interactive_hanoi, hanoi_moves_to_text, check_hanoi_validity)
+                                     render_interactive_hanoi, hanoi_moves_to_text, check_hanoi_validity,
+                                     render_interactive_graph_coloring, graph_coloring_to_text)
 except ImportError as e:
     st.error(f"Eroare la importuri: {e}. Verifică dacă ai creat toate fișierele!")
     st.stop()
@@ -33,6 +35,7 @@ UI_LABEL_NASH = "Jocuri (Echilibru Nash)"
 UI_LABEL_NQUEENS = "Căutare (N-Queens)"
 UI_LABEL_KNIGHTS = "Căutare (Turul Calului)"
 UI_LABEL_HANOI = "Căutare (Turnurile Hanoi)"
+UI_LABEL_GRAPH_COLORING = "CSP (Graph Coloring)"
 
 
 def build_prompt_text(ui_label: str, *, data, metadata: dict, fallback_game=None) -> str:
@@ -67,6 +70,17 @@ def build_prompt_text(ui_label: str, *, data, metadata: dict, fallback_game=None
             f"tija {peg_names[-1]}, respectand regulile (un disc mai mare nu poate fi plasat peste unul mai mic)."
         )
 
+    if ui_label == UI_LABEL_GRAPH_COLORING:
+        n = metadata.get("n") or (len(data) if data else "?")
+        k = metadata.get("k") or len(metadata.get("color_names") or []) or "?"
+        colors = metadata.get("color_names") or []
+        colors_text = ", ".join(map(str, colors)) if colors else "—"
+        return (
+            "Se dă un graf neorientat (noduri 1..n) reprezentat prin matricea de adiacență de mai jos. "
+            f"Colorați nodurile folosind cel mult k={k} culori astfel încât două noduri adiacente să nu "
+            f"aibă aceeași culoare. Culori permise: {colors_text}. (n={n})"
+        )
+
     return ""
 
 
@@ -90,6 +104,11 @@ TEST_TOPIC_REGISTRY = {
         "chapter": "Search",
         "ui_label": UI_LABEL_HANOI,
         "factory": TowerOfHanoiProblem,
+    },
+    "Graph Coloring": {
+        "chapter": "CSP",
+        "ui_label": UI_LABEL_GRAPH_COLORING,
+        "factory": GraphColoringProblem,
     },
 }
 
@@ -126,6 +145,15 @@ def is_test_answered(question, answer) -> bool:
         else:
             moves = []
         return len(moves) > 0
+
+    if ui_label == UI_LABEL_GRAPH_COLORING:
+        if isinstance(answer, dict):
+            assignment = answer.get("assignment") or {}
+            text = str(answer.get("text") or "")
+            return bool(assignment) or bool(text.strip())
+        if isinstance(answer, str):
+            return bool(answer.strip())
+        return False
 
     return bool(answer)
 
@@ -214,6 +242,41 @@ def evaluate_test_question(question, answer) -> tuple[float, str, dict]:
 
         score = 50.0 + (float(efficiency) * 50.0)
         return float(score), str(validity_msg), {"details": detailed_feedback, "efficiency": efficiency}
+
+    if ui_label == UI_LABEL_GRAPH_COLORING:
+        metadata = question.metadata or {}
+        n = int(metadata.get("n") or (len(question.data) if question.data else 0) or 0)
+        color_names = list(metadata.get("color_names") or [])
+        edges = list(metadata.get("edges") or [])
+
+        assignment: dict[int, str] = {}
+        parse_errors: list[str] = []
+
+        if isinstance(answer, dict):
+            assignment = dict(answer.get("assignment") or {})
+            text = str(answer.get("text") or "")
+            if not assignment and text.strip():
+                parsed = parse_coloring_text(text, n=n, color_names=color_names)
+                assignment = parsed.assignment
+                parse_errors = parsed.errors
+        elif isinstance(answer, str):
+            parsed = parse_coloring_text(answer, n=n, color_names=color_names)
+            assignment = parsed.assignment
+            parse_errors = parsed.errors
+        else:
+            return 0.0, "Necompletat.", {}
+
+        score, message, details = evaluate_graph_coloring(
+            assignment,
+            n=n,
+            edges=edges,
+            color_names=color_names,
+        )
+        if parse_errors:
+            details = dict(details or {})
+            details["parse_errors"] = parse_errors
+            message = f"{message} • Probleme parsare: {len(parse_errors)}"
+        return float(score), str(message), details
 
     return 0.0, "Tip de întrebare necunoscut.", {}
 
@@ -330,7 +393,7 @@ with st.sidebar:
     if app_mode == "O singură întrebare":
         problem_type = st.radio(
             "Alege Tipul Problemei:",
-            (UI_LABEL_NASH, UI_LABEL_NQUEENS, UI_LABEL_KNIGHTS, UI_LABEL_HANOI),
+            (UI_LABEL_NASH, UI_LABEL_NQUEENS, UI_LABEL_KNIGHTS, UI_LABEL_HANOI, UI_LABEL_GRAPH_COLORING),
             key="single_problem_type",
         )
     else:
@@ -338,12 +401,14 @@ with st.sidebar:
         selected_chapters = st.multiselect(
             "Capitole:",
             ("Search", "Games", "CSP", "Adversarial"),
-            default=("Search", "Games"),
+            default=("Search", "Games", "CSP"),
             key="test_chapters",
         )
 
-        if any(ch in ("CSP", "Adversarial") for ch in selected_chapters):
-            st.caption("CSP/Adversarial nu sunt implementate încă; sunt ignorate la generare.")
+        if "Adversarial" in selected_chapters:
+            st.caption("Adversarial nu este implementat încă; este ignorat la generare.")
+        if "CSP" in selected_chapters:
+            st.caption("CSP: disponibil Graph Coloring.")
 
         available_topics = [
             name for name, cfg in TEST_TOPIC_REGISTRY.items() if cfg["chapter"] in set(selected_chapters)
@@ -562,6 +627,30 @@ if app_mode == "Test (N întrebări)":
                         st.write(initial_state.get(peg_idx, []))
             else:
                 st.write(current.data)
+        elif ui_label == UI_LABEL_GRAPH_COLORING:
+            metadata = current.metadata or {}
+            n = int(metadata.get("n") or (len(current.data) if current.data else 0) or 0)
+            k = int(metadata.get("k") or len(metadata.get("color_names") or []) or 0)
+            color_names = list(metadata.get("color_names") or [])
+            edges = list(metadata.get("edges") or [])
+
+            if color_names:
+                st.caption(f"n={n} • k={k} • culori: {', '.join(map(str, color_names))}")
+            else:
+                st.caption(f"n={n} • k={k}")
+
+            with st.expander("Muchii (edge list)"):
+                st.write(", ".join(f"({u},{v})" for u, v in edges) if edges else "—")
+
+            try:
+                df_board = pd.DataFrame(
+                    current.data,
+                    index=[str(i) for i in range(1, n + 1)] if n else None,
+                    columns=[str(i) for i in range(1, n + 1)] if n else None,
+                )
+                st.dataframe(df_board, use_container_width=True)
+            except Exception:
+                st.write(current.data)
         else:
             try:
                 df_board = pd.DataFrame(current.data)
@@ -571,7 +660,11 @@ if app_mode == "Test (N întrebări)":
 
         answer_key = f"test_answer_{current.id}"
         if answer_key not in st.session_state:
-            st.session_state[answer_key] = session.user_answers.get(current.id, "")
+            existing_answer = session.user_answers.get(current.id, "")
+            if isinstance(existing_answer, dict):
+                st.session_state[answer_key] = str(existing_answer.get("text") or "")
+            else:
+                st.session_state[answer_key] = existing_answer
 
         ui_label = (current.metadata or {}).get("ui_label") or current.type
 
@@ -615,6 +708,48 @@ if app_mode == "Test (N întrebări)":
                     "moves": user_moves,
                     "pegs_state": pegs_state,
                     "text": user_text,
+                }
+        elif ui_label == UI_LABEL_GRAPH_COLORING:
+            metadata = current.metadata or {}
+            n = int(metadata.get("n") or (len(current.data) if current.data else 0) or 0)
+            color_names = list(metadata.get("color_names") or [])
+
+            input_mode = st.radio(
+                "Mod răspuns:",
+                ("Dropdown", "Text"),
+                horizontal=True,
+                key=f"test_{current.id}_graph_mode",
+            )
+
+            if input_mode == "Text":
+                user_text = st.text_area(
+                    "✍️ Răspunsul tău (ex: 1:R, 2:G, 3:B):",
+                    key=answer_key,
+                    height=120,
+                )
+                parsed = parse_coloring_text(user_text, n=n, color_names=color_names)
+                if parsed.errors:
+                    with st.expander("⚠️ Probleme de parsare"):
+                        for err in parsed.errors:
+                            st.write(f"- {err}")
+                session.user_answers[current.id] = {
+                    "assignment": parsed.assignment,
+                    "text": user_text,
+                    "mode": "text",
+                }
+            else:
+                assignment = render_interactive_graph_coloring(
+                    n=n,
+                    color_names=color_names,
+                    key_prefix=f"test_{current.id}_graph",
+                )
+                user_text = graph_coloring_to_text(assignment)
+                with st.expander("📝 Vezi răspunsul tău (text)"):
+                    st.write(user_text or "Nu ai asignat încă nicio culoare.")
+                session.user_answers[current.id] = {
+                    "assignment": assignment,
+                    "text": user_text,
+                    "mode": "dropdown",
                 }
         else:
             user_answer = st.text_area("✍️ Răspunsul tău:", key=answer_key, height=140)
@@ -662,12 +797,16 @@ if st.session_state.problem_type != problem_type:
     st.session_state.question = None
     st.session_state.test_session = TestSession()
     
-    if problem_type == "Jocuri (Echilibru Nash)":
+    if problem_type == UI_LABEL_NASH:
         st.session_state.game = NashGame()
-    elif problem_type == "Căutare (N-Queens)":
+    elif problem_type == UI_LABEL_NQUEENS:
         st.session_state.game = NQueensProblem()
-    elif problem_type == "Căutare (Turul Calului)":
+    elif problem_type == UI_LABEL_KNIGHTS:
         st.session_state.game = KnightsTourProblem()
+    elif problem_type == UI_LABEL_HANOI:
+        st.session_state.game = TowerOfHanoiProblem()
+    elif problem_type == UI_LABEL_GRAPH_COLORING:
+        st.session_state.game = GraphColoringProblem()
     else:
         st.session_state.game = TowerOfHanoiProblem()
 
@@ -719,14 +858,25 @@ with col_left:
         
         pdf_req = getattr(question, "prompt_text", "") if question else ""
         if not pdf_req:
-            if problem_type == "Jocuri (Echilibru Nash)":
+            if problem_type == UI_LABEL_NASH:
                 pdf_req = "Se da matricea de plati de mai jos. Identificati daca exista un Echilibru Nash pur si specificati coordonatele (ex: L1-C1)."
-            elif problem_type == "Căutare (N-Queens)":
+            elif problem_type == UI_LABEL_NQUEENS:
                 board_size = len(st.session_state.matrix)
                 pdf_req = f"Pe tabla de {board_size}x{board_size} de mai jos, propuneti o configurare pentru regine astfel incat sa nu se atace reciproc (pe linii, coloane sau diagonale)."
-            elif problem_type == "Căutare (Turul Calului)":
+            elif problem_type == UI_LABEL_KNIGHTS:
                 board_size = len(st.session_state.matrix)
                 pdf_req = f"Pe tabla de {board_size}x{board_size} de mai jos, creati un tur al calului care viziteaza fiecare casuta exact o singura data. Calul se misca in forma de 'L'."
+            elif problem_type == UI_LABEL_GRAPH_COLORING:
+                metadata = question.metadata if question else {}
+                n = int(metadata.get("n") or (len(st.session_state.matrix) if st.session_state.matrix else 0) or 0)
+                k = int(metadata.get("k") or len(metadata.get("color_names") or []) or 0)
+                colors = metadata.get("color_names") or []
+                colors_text = ", ".join(map(str, colors)) if colors else "—"
+                pdf_req = (
+                    "Se dă un graf neorientat (noduri 1..n) reprezentat prin matricea de adiacență de mai jos. "
+                    f"Colorați nodurile folosind cel mult k={k} culori astfel încât două noduri adiacente să nu "
+                    f"aibă aceeași culoare. Culori permise: {colors_text}. (n={n})"
+                )
             else:  # Tower of Hanoi
                 num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
                 num_pegs = (question.metadata.get("num_pegs") if question else None) or st.session_state.game.num_pegs
@@ -738,7 +888,7 @@ with col_left:
 
         try:
             # For Tower of Hanoi, pass the initial state
-            if problem_type == "Căutare (Turnurile Hanoi)":
+            if problem_type == UI_LABEL_HANOI:
                 hanoi_state = (question.metadata.get("initial_state") if question else None) or st.session_state.game.initial_state
                 pdf_bytes = create_pdf(problem_type, pdf_req, st.session_state.matrix, hanoi_state=hanoi_state)
             else:
@@ -760,7 +910,7 @@ with col_right:
     
     if st.session_state.matrix:
         question = st.session_state.get("question")
-        if problem_type == "Jocuri (Echilibru Nash)":
+        if problem_type == UI_LABEL_NASH:
             st.markdown("### Cerință:")
             st.write("Se dă matricea de plăți de mai jos. **Identifică dacă există un Echilibru Nash pur** și specifică coordonatele.")
             
@@ -771,7 +921,7 @@ with col_right:
             )
             st.table(df_display)
             
-        elif problem_type == "Căutare (N-Queens)":
+        elif problem_type == UI_LABEL_NQUEENS:
             # Get the board size from the generated problem
             board_size = len(st.session_state.matrix)
             
@@ -791,7 +941,7 @@ with col_right:
             with st.expander("📝 Vezi reprezentarea text a plasării tale"):
                 st.write(user_answer)
         
-        elif problem_type == "Căutare (Turul Calului)":
+        elif problem_type == UI_LABEL_KNIGHTS:
             # Get the board size and starting position
             board_size = len(st.session_state.matrix)
             start_pos = (question.metadata.get("start_pos") if question else None) or st.session_state.game.start_pos
@@ -811,7 +961,60 @@ with col_right:
             # Show the text representation
             with st.expander("📝 Vezi reprezentarea text a traseului tău"):
                 st.write(user_answer)
-        
+        elif problem_type == UI_LABEL_GRAPH_COLORING:
+            metadata = question.metadata if question else {}
+            n = int(metadata.get("n") or (len(st.session_state.matrix) if st.session_state.matrix else 0) or 0)
+            k = int(metadata.get("k") or len(metadata.get("color_names") or []) or 0)
+            color_names = list(metadata.get("color_names") or [])
+            edges = list(metadata.get("edges") or [])
+
+            st.markdown("### Cerință:")
+            if color_names:
+                st.write(f"Colorați graful folosind cel mult **{k}** culori: **{', '.join(map(str, color_names))}**.")
+            else:
+                st.write(f"Colorați graful folosind cel mult **{k}** culori.")
+
+            try:
+                df_display = pd.DataFrame(
+                    st.session_state.matrix,
+                    index=[str(i) for i in range(1, n + 1)] if n else None,
+                    columns=[str(i) for i in range(1, n + 1)] if n else None,
+                )
+                st.dataframe(df_display, use_container_width=True)
+            except Exception:
+                st.write(st.session_state.matrix)
+
+            with st.expander("Muchii (edge list)"):
+                st.write(", ".join(f"({u},{v})" for u, v in edges) if edges else "—")
+
+            input_mode = st.radio(
+                "Mod răspuns:",
+                ("Dropdown", "Text"),
+                horizontal=True,
+                key="single_graph_coloring_mode",
+            )
+            if input_mode == "Text":
+                user_answer = st.text_area(
+                    "✍️ Răspunsul tău (ex: 1:R, 2:G, 3:B):",
+                    key="single_graph_coloring_text",
+                    height=120,
+                )
+                parsed = parse_coloring_text(user_answer, n=n, color_names=color_names)
+                graph_assignment = parsed.assignment
+                if parsed.errors:
+                    with st.expander("⚠️ Probleme de parsare"):
+                        for err in parsed.errors:
+                            st.write(f"- {err}")
+            else:
+                graph_assignment = render_interactive_graph_coloring(
+                    n=n,
+                    color_names=color_names,
+                    key_prefix="graph_coloring_user",
+                )
+                user_answer = graph_coloring_to_text(graph_assignment)
+                with st.expander("📝 Vezi răspunsul tău (text)"):
+                    st.write(user_answer or "Nu ai asignat încă nicio culoare.")
+
         else:  # Tower of Hanoi
             num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
             num_pegs = (question.metadata.get("num_pegs") if question else None) or st.session_state.game.num_pegs
@@ -836,7 +1039,7 @@ with col_right:
 
         st.markdown("---")
         
-        if problem_type == "Jocuri (Echilibru Nash)":
+        if problem_type == UI_LABEL_NASH:
             # Keep text area for Nash equilibrium
             user_answer = st.text_area("✍️ Răspunsul tău:", height=100, placeholder="Scrie explicația aici...")
             
@@ -858,7 +1061,7 @@ with col_right:
                     
                     with st.expander("🔍 Vezi Soluția Algoritmică (Gold Standard)"):
                         st.info(st.session_state.correct_expl)
-        elif problem_type == "Căutare (N-Queens)":
+        elif problem_type == UI_LABEL_NQUEENS:
             # N-Queens verification
             if st.button("✅ Verifică Răspunsul", type="primary"):
                 # Get expected number of queens
@@ -907,7 +1110,7 @@ with col_right:
                 with st.expander("🔍 Vezi Soluția Algoritmică (Gold Standard)"):
                     st.info(st.session_state.correct_expl)
         
-        elif problem_type == "Căutare (Turul Calului)":
+        elif problem_type == UI_LABEL_KNIGHTS:
             # Knight's Tour verification
             if st.button("✅ Verifică Răspunsul", type="primary"):
                 # Get starting position and solution
@@ -980,6 +1183,40 @@ with col_right:
                     )
                     st.dataframe(df_solution, use_container_width=True)
         
+        elif problem_type == UI_LABEL_GRAPH_COLORING:
+            if st.button("✅ Verifică Răspunsul", type="primary"):
+                metadata = question.metadata if question else {}
+                n = int(metadata.get("n") or (len(st.session_state.matrix) if st.session_state.matrix else 0) or 0)
+                color_names = list(metadata.get("color_names") or [])
+                edges = list(metadata.get("edges") or [])
+
+                score, msg, details = evaluate_graph_coloring(
+                    graph_assignment if "graph_assignment" in locals() else {},
+                    n=n,
+                    edges=edges,
+                    color_names=color_names,
+                )
+
+                st.markdown(f"### Scor: **{score:.2f}%**")
+                if score >= 99.99:
+                    st.success(msg)
+                elif score >= 60:
+                    st.warning(msg)
+                else:
+                    st.error(msg)
+
+                if details.get("conflicts"):
+                    with st.expander("⚠️ Conflicte (muchii cu aceeași culoare)"):
+                        st.write(", ".join(f"{u}-{v}" for u, v in details["conflicts"]))
+                if details.get("missing"):
+                    with st.expander("⏳ Noduri necolorate"):
+                        st.write(", ".join(map(str, details["missing"])))
+
+                with st.expander("🔍 Vezi Soluția (Gold Standard)"):
+                    st.info(st.session_state.correct_expl)
+                    if question and getattr(question, "correct_answer", None):
+                        st.write(question.correct_answer)
+
         else:  # Tower of Hanoi verification
             if st.button("✅ Verifică Răspunsul", type="primary"):
                 num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
