@@ -22,6 +22,7 @@ SmarTest este o aplicație locală pentru generare de probleme tip examen și ev
   - Graph Coloring: 0–100% (validare + scor parțial pe conflicte).
 - **Teorie (Cerința 1):** întrebări „Alegere Strategie” (strategie + justificare scurtă, scoring exact + parțial) (`app/modules/strategy_choice.py`, `app/evaluator/strategy_choice.py`).
 - **Export PDF:** generare subiect PDF (`app/utils/pdf_generator.py`).
+- **Export PDF evaluare:** după „Verifică Răspunsul” poți descărca un raport cu scor + feedback + soluția corectă (separat de PDF-ul de enunț) (`app/utils/pdf_generator.py`, `main.py`).
 - **Import PDF răspuns:** încărcare PDF + extragere text (fără OCR) + evaluare pentru Nash/CSP/Graph Coloring/MinMax (`app/utils/pdf_parser.py`, `app/utils/helpers.py`, `main.py`).
 
 ## 🧩 CSP: Backtracking cu FC/MRV/AC-3 (Cerința 3)
@@ -183,6 +184,18 @@ source venv/bin/activate
 pip install -r requirements.txt
 streamlit run main.py
 ```
+
+## 🧾 Export evaluare (PDF)
+
+După ce apeși **„Verifică Răspunsul”**, aplicația poate exporta un PDF separat (față de enunț) cu:
+- scor
+- feedback
+- răspunsul tău
+- soluția corectă + explicație
+
+**Unde găsești butonul**
+- Mod „O singură întrebare”: în stânga, la **Opțiuni Export**, apare **„Descarcă Evaluarea (PDF)”** după evaluare.
+- Mod „Test”: în ecranul **Rezultate Test**, apare **„Descarcă Evaluare (PDF)”**.
 
 ## 📄 Import răspuns din PDF (fără OCR)
 

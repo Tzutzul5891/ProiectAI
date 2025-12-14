@@ -36,7 +36,12 @@ try:
         format_csp_pairs,
         format_graph_coloring_mapping,
     )
-    from app.utils.pdf_generator import create_pdf, create_test_pdf
+    from app.utils.pdf_generator import (
+        create_evaluation_pdf,
+        create_pdf,
+        create_test_evaluation_pdf,
+        create_test_pdf,
+    )
     from app.utils.pdf_parser import extract_text_from_pdf
     from app.gui.components import (render_interactive_queens_board, board_to_text, check_queens_validity,
                                      render_interactive_knights_board, knights_board_to_text, check_knights_tour_validity,
@@ -398,6 +403,7 @@ def render_test_results(session: TestSession) -> None:
     answered = sum(1 for q in session.questions if is_test_answered(q, session.user_answers.get(q.id)))
 
     results_rows = []
+    feedback_by_id: dict[str, str] = {}
     total_score = 0.0
     for idx, q in enumerate(session.questions, start=1):
         topic = (q.metadata or {}).get("topic") or (q.metadata or {}).get("ui_label") or q.type
@@ -405,6 +411,7 @@ def render_test_results(session: TestSession) -> None:
         attempted = is_test_answered(q, answer)
         score, message, _details = evaluate_test_question(q, answer if attempted else None)
         session.scores[q.id] = float(score)
+        feedback_by_id[q.id] = str(message)
         total_score += float(score)
         results_rows.append(
             {
@@ -420,7 +427,20 @@ def render_test_results(session: TestSession) -> None:
     avg_score = (total_score / total) if total > 0 else 0.0
     st.info(f"Răspunsuri completate: {answered}/{total} • Scor mediu: {avg_score:.2f}%")
 
-    col_back, col_pdf_test, col_pdf_key = st.columns([1, 1, 1])
+    try:
+        st.session_state.test_eval_pdf_bytes = create_test_evaluation_pdf(
+            {
+                "questions": session.questions,
+                "user_answers": session.user_answers,
+                "scores": session.scores,
+                "feedback": feedback_by_id,
+            }
+        )
+    except Exception as e:
+        st.session_state.test_eval_pdf_bytes = None
+        st.warning(f"Nu s-a putut genera PDF-ul de evaluare: {e}")
+
+    col_back, col_pdf_test, col_pdf_key, col_pdf_eval = st.columns([1, 1, 1, 1])
     with col_back:
         if st.button("⬅️ Înapoi la întrebări", key="test_back_to_questions"):
             st.session_state.test_view = "questions"
@@ -443,6 +463,16 @@ def render_test_results(session: TestSession) -> None:
                 file_name="answer_key_ia.pdf",
                 mime="application/pdf",
                 key="dl_answer_key_pdf_results",
+                use_container_width=True,
+            )
+    with col_pdf_eval:
+        if st.session_state.get("test_eval_pdf_bytes"):
+            st.download_button(
+                "⬇️ Descarcă Evaluare (PDF)",
+                data=st.session_state["test_eval_pdf_bytes"],
+                file_name="evaluare_test_ia.pdf",
+                mime="application/pdf",
+                key="dl_test_eval_pdf_results",
                 use_container_width=True,
             )
 
@@ -586,6 +616,7 @@ if st.session_state.app_mode != app_mode:
     st.session_state.test_session = TestSession()
     st.session_state.test_pdf_bytes = None
     st.session_state.answer_key_pdf_bytes = None
+    st.session_state.test_eval_pdf_bytes = None
     st.session_state.test_view = "questions"
 
 if app_mode == "Test (N întrebări)":
@@ -597,6 +628,7 @@ if app_mode == "Test (N întrebări)":
     if generate_test_clicked:
         st.session_state.test_pdf_bytes = None
         st.session_state.answer_key_pdf_bytes = None
+        st.session_state.test_eval_pdf_bytes = None
         st.session_state.test_generation_errors = []
         st.session_state.test_view = "questions"
 
@@ -970,6 +1002,7 @@ if st.session_state.problem_type != problem_type:
     st.session_state.user_feedback = ""
     st.session_state.question = None
     st.session_state.test_session = TestSession()
+    st.session_state.single_eval_pdf_bytes = None
     
     if problem_type == UI_LABEL_NASH:
         st.session_state.game = NashGame()
@@ -1040,6 +1073,7 @@ with col_left:
                             st.session_state.correct_expl = question.correct_explanation
                             st.session_state.user_feedback = ""
                             st.session_state["single_csp_bt_answer"] = ""
+                            st.session_state.single_eval_pdf_bytes = None
                             st.success("Instanță încărcată cu succes!")
     elif problem_type == UI_LABEL_ADVERSARIAL:
         st.markdown("### Arbori adversarial (Alpha-Beta)")
@@ -1096,12 +1130,13 @@ with col_left:
                             else:
                                 st.session_state.question = question
                                 st.session_state.test_session = TestSession(questions=[question], current_index=0)
-                                st.session_state.matrix = question.data
-                                st.session_state.correct_expl = question.correct_explanation
-                                st.session_state.user_feedback = ""
-                                st.session_state["single_ab_root_value"] = ""
-                                st.session_state["single_ab_leaves"] = ""
-                                st.success("Arbore încărcat cu succes!")
+                            st.session_state.matrix = question.data
+                            st.session_state.correct_expl = question.correct_explanation
+                            st.session_state.user_feedback = ""
+                            st.session_state["single_ab_root_value"] = ""
+                            st.session_state["single_ab_leaves"] = ""
+                            st.session_state.single_eval_pdf_bytes = None
+                            st.success("Arbore încărcat cu succes!")
         else:
             depth = int(
                 st.slider(
@@ -1180,6 +1215,7 @@ with col_left:
                             st.session_state.user_feedback = ""
                             st.session_state["single_ab_root_value"] = ""
                             st.session_state["single_ab_leaves"] = ""
+                            st.session_state.single_eval_pdf_bytes = None
                             st.success("Arbore generat cu succes!")
     else:
         if st.button("🎲 Generează Întrebare Nouă", use_container_width=True):
@@ -1217,6 +1253,7 @@ with col_left:
                         st.session_state.matrix = question.data
                         st.session_state.correct_expl = question.correct_explanation
                         st.session_state.user_feedback = ""
+                        st.session_state.single_eval_pdf_bytes = None
                         st.success("Problemă generată cu succes!")
 
     if st.session_state.matrix:
@@ -1278,6 +1315,17 @@ with col_left:
             )
         except Exception as e:
             st.warning(f"Nu s-a putut genera PDF-ul: {e}")
+
+        eval_pdf_bytes = st.session_state.get("single_eval_pdf_bytes")
+        if eval_pdf_bytes:
+            st.download_button(
+                label="⬇️ Descarcă Evaluarea (PDF)",
+                data=eval_pdf_bytes,
+                file_name="evaluare_ia.pdf",
+                mime="application/pdf",
+                key="dl_single_evaluation_pdf",
+                use_container_width=True,
+            )
 
 with col_right:
     st.subheader("2. Vizualizare și Răspuns")
@@ -1637,10 +1685,16 @@ with col_right:
                 if not user_answer:
                     st.warning("Te rog scrie un răspuns înainte de verificare.")
                 else:
+                    report_user_answer = user_answer
+                    report_feedback = ""
+
                     if nash_answer_mode == "PDF":
                         expected = set(extract_nash_coordinates(st.session_state.correct_expl))
-                        effective_answer = str(st.session_state.get("single_nash_answer_from_pdf") or "").strip() or user_answer
+                        effective_answer = (
+                            str(st.session_state.get("single_nash_answer_from_pdf") or "").strip() or user_answer
+                        )
                         got = set(extract_nash_coordinates(effective_answer))
+                        report_user_answer = effective_answer
 
                         if expected:
                             correct = expected & got
@@ -1654,10 +1708,13 @@ with col_right:
                             st.markdown(f"### Scor: **{score:.2f}%**")
                             if score >= 99.99 and not extra:
                                 st.success("✅ Corect (coordonate).")
+                                report_feedback = "Corect (coordonate)."
                             elif score > 0:
                                 st.warning("Parțial (coordonate).")
+                                report_feedback = "Partial (coordonate)."
                             else:
                                 st.error("❌ Incorect (coordonate).")
+                                report_feedback = "Incorect (coordonate)."
 
                             with st.expander("🔎 Detalii coordonate"):
                                 st.write(f"Așteptat: {', '.join(sorted(expected))}")
@@ -1666,16 +1723,27 @@ with col_right:
                                     st.write(f"Lipsește: {', '.join(sorted(missing))}")
                                 if extra:
                                     st.write(f"În plus: {', '.join(sorted(extra))}")
+
+                            report_feedback = "\n".join(
+                                [
+                                    report_feedback,
+                                    f"Asteptat: {', '.join(sorted(expected))}",
+                                    f"Primit: {', '.join(sorted(got)) or '—'}",
+                                    f"Lipseste: {', '.join(sorted(missing))}" if missing else "",
+                                    f"In plus: {', '.join(sorted(extra))}" if extra else "",
+                                ]
+                            ).strip()
                         else:
-                            # No equilibrium case.
                             lower = str(effective_answer).lower()
                             ok = ("nu" in lower) and ("echilibru" in lower or "nash" in lower)
                             score = 100.0 if ok else 0.0
                             st.markdown(f"### Scor: **{score:.2f}%**")
                             if ok:
                                 st.success("✅ Corect: ai identificat că nu există echilibru Nash pur.")
+                                report_feedback = "Corect: ai identificat ca nu exista echilibru Nash pur."
                             else:
                                 st.error("❌ Incorect: răspunsul nu indică lipsa unui echilibru Nash pur.")
+                                report_feedback = "Incorect: raspunsul nu indica lipsa unui echilibru Nash pur."
                     else:
                         with st.spinner("AI-ul analizează răspunsul tău..."):
                             score, feedback = evaluate_semantic(user_answer, st.session_state.correct_expl)
@@ -1688,7 +1756,19 @@ with col_right:
                             st.warning(f"Feedback: {feedback}")
                         else:
                             st.error(f"Feedback: {feedback}")
-                    
+                        report_feedback = str(feedback)
+
+                    try:
+                        st.session_state.single_eval_pdf_bytes = create_evaluation_pdf(
+                            question,
+                            report_user_answer,
+                            float(score),
+                            report_feedback,
+                            getattr(question, "correct_answer", None) if question else None,
+                        )
+                    except Exception as e:
+                        st.warning(f"Nu s-a putut genera PDF-ul de evaluare: {e}")
+
                     with st.expander("🔍 Vezi Soluția Algoritmică (Gold Standard)"):
                         st.info(st.session_state.correct_expl)
         elif problem_type == UI_LABEL_NQUEENS:
@@ -1737,6 +1817,24 @@ with col_right:
                     st.markdown(f"### Scor Final: **100.00%**")
                     st.success("Feedback: Excelent! Configurarea este perfect validă și corectă!")
                     
+                report_score = float(partial_score) if not is_valid else 100.0
+                report_feedback = str(validity_msg)
+                if detailed_feedback:
+                    report_feedback = report_feedback + "\n" + "\n".join(str(x) for x in detailed_feedback)
+                if not is_valid:
+                    report_feedback = report_feedback + f"\nScor partial: {float(partial_score):.2f}%"
+
+                try:
+                    st.session_state.single_eval_pdf_bytes = create_evaluation_pdf(
+                        question,
+                        user_answer,
+                        report_score,
+                        report_feedback,
+                        getattr(question, "correct_answer", None) if question else None,
+                    )
+                except Exception as e:
+                    st.warning(f"Nu s-a putut genera PDF-ul de evaluare: {e}")
+
                 with st.expander("🔍 Vezi Soluția Algoritmică (Gold Standard)"):
                     st.info(st.session_state.correct_expl)
         
@@ -1793,6 +1891,24 @@ with col_right:
                         st.write("- ✅ Acoperire completă")
                         st.write("- ✅ Toate mișcările sunt valide")
                         st.write("- ✅ Traseu complet și conectat")
+
+                report_score = float(ai_score) if not is_valid else 100.0
+                report_feedback = str(validity_msg)
+                if detailed_feedback:
+                    report_feedback = report_feedback + "\n" + "\n".join(str(x) for x in detailed_feedback)
+                if not is_valid:
+                    report_feedback = report_feedback + f"\nScor AI: {float(ai_score):.2f}%"
+
+                try:
+                    st.session_state.single_eval_pdf_bytes = create_evaluation_pdf(
+                        question,
+                        user_answer,
+                        report_score,
+                        report_feedback,
+                        solution_board,
+                    )
+                except Exception as e:
+                    st.warning(f"Nu s-a putut genera PDF-ul de evaluare: {e}")
                 
                 # Show solution visualization for Knight's Tour
                 with st.expander("🔍 Vezi Soluția (Gold Standard)"):
@@ -1842,6 +1958,27 @@ with col_right:
                     with st.expander("⏳ Noduri necolorate"):
                         st.write(", ".join(map(str, details["missing"])))
 
+                report_feedback = str(msg)
+                if details.get("conflicts"):
+                    report_feedback = report_feedback + "\nConflicte: " + ", ".join(
+                        f"{u}-{v}" for u, v in details.get("conflicts") or []
+                    )
+                if details.get("missing"):
+                    report_feedback = report_feedback + "\nNoduri necolorate: " + ", ".join(
+                        map(str, details.get("missing") or [])
+                    )
+
+                try:
+                    st.session_state.single_eval_pdf_bytes = create_evaluation_pdf(
+                        question,
+                        user_answer if "user_answer" in locals() else "",
+                        float(score),
+                        report_feedback,
+                        getattr(question, "correct_answer", None) if question else None,
+                    )
+                except Exception as e:
+                    st.warning(f"Nu s-a putut genera PDF-ul de evaluare: {e}")
+
                 with st.expander("🔍 Vezi Soluția (Gold Standard)"):
                     st.info(st.session_state.correct_expl)
                     if question and getattr(question, "correct_answer", None):
@@ -1889,6 +2026,33 @@ with col_right:
                         for var, info in details["wrong"].items():
                             st.write(f"- {var}: așteptat `{info.get('expected')}`, primit `{info.get('got')}`")
 
+                report_feedback = str(msg)
+                if details.get("parse_errors"):
+                    report_feedback = report_feedback + "\nProbleme parsare:\n- " + "\n- ".join(
+                        str(e) for e in (details.get("parse_errors") or [])
+                    )
+                if details.get("missing"):
+                    report_feedback = report_feedback + "\nVariabile lipsa: " + ", ".join(
+                        map(str, details.get("missing") or [])
+                    )
+                if details.get("wrong"):
+                    wrong_lines = []
+                    for var, info in (details.get("wrong") or {}).items():
+                        wrong_lines.append(f"{var}: asteptat {info.get('expected')}, primit {info.get('got')}")
+                    if wrong_lines:
+                        report_feedback = report_feedback + "\nVariabile gresite:\n- " + "\n- ".join(wrong_lines)
+
+                try:
+                    st.session_state.single_eval_pdf_bytes = create_evaluation_pdf(
+                        question,
+                        answer_text,
+                        float(score),
+                        report_feedback,
+                        getattr(question, "correct_answer", None) if question else None,
+                    )
+                except Exception as e:
+                    st.warning(f"Nu s-a putut genera PDF-ul de evaluare: {e}")
+
                 with st.expander("🔍 Vezi Soluția (Gold Standard)"):
                     st.info(st.session_state.correct_expl)
                     if question and getattr(question, "correct_answer", None):
@@ -1915,6 +2079,27 @@ with col_right:
                     with st.expander("⚠️ Probleme de parsare"):
                         for err in details["errors"]:
                             st.write(f"- {err}")
+
+                user_answer_text = (
+                    f"value={st.session_state.get('single_ab_root_value', '')} "
+                    f"leaves={st.session_state.get('single_ab_leaves', '')}"
+                ).strip()
+                report_feedback = str(msg)
+                if details.get("errors"):
+                    report_feedback = report_feedback + "\nProbleme parsare:\n- " + "\n- ".join(
+                        str(e) for e in (details.get("errors") or [])
+                    )
+
+                try:
+                    st.session_state.single_eval_pdf_bytes = create_evaluation_pdf(
+                        question,
+                        user_answer_text,
+                        float(score),
+                        report_feedback,
+                        expected,
+                    )
+                except Exception as e:
+                    st.warning(f"Nu s-a putut genera PDF-ul de evaluare: {e}")
 
                 with st.expander("🔍 Vezi Soluția (Gold Standard)"):
                     st.info(st.session_state.correct_expl)
@@ -1969,6 +2154,27 @@ with col_right:
                     st.markdown(f"### Scor Final: **100.00%**")
                     st.success("Feedback: Perfect! Ai rezolvat puzzle-ul cu numărul minim de mișcări!")
                 
+                report_score = 0.0
+                if is_complete and is_optimal:
+                    report_score = 100.0
+                elif is_complete and not is_optimal:
+                    report_score = float(score)
+
+                report_feedback = str(validity_msg)
+                if detailed_feedback:
+                    report_feedback = report_feedback + "\n" + "\n".join(str(x) for x in detailed_feedback)
+
+                try:
+                    st.session_state.single_eval_pdf_bytes = create_evaluation_pdf(
+                        question,
+                        user_answer,
+                        report_score,
+                        report_feedback,
+                        solution_moves,
+                    )
+                except Exception as e:
+                    st.warning(f"Nu s-a putut genera PDF-ul de evaluare: {e}")
+
                 # Show solution
                 with st.expander("🔍 Vezi Soluția Optimă (Gold Standard)"):
                     st.info(st.session_state.correct_expl)

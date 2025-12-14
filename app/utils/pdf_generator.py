@@ -232,3 +232,202 @@ def create_test_pdf(
             pdf.rect(x=10, y=pdf.get_y(), w=190, h=90)
 
     return pdf.output(dest="S").encode("latin-1")
+
+
+def _answer_to_text(answer: Any) -> str:
+    """Best-effort: prefer a `text` field, otherwise fallback to string."""
+
+    if answer is None:
+        return ""
+    if isinstance(answer, str):
+        return answer
+    if isinstance(answer, dict):
+        text = answer.get("text")
+        if isinstance(text, str) and text.strip():
+            return text
+    return str(answer)
+
+
+def _render_question_context(pdf: FPDF, fields: dict[str, Any]) -> None:
+    metadata = fields.get("metadata") or {}
+
+    pdf.set_font("Helvetica", size=11)
+    type_label = metadata.get("ui_label") or fields.get("type") or ""
+    if type_label:
+        pdf.cell(0, 7, clean_text(f"Tip: {type_label}"), ln=True)
+
+    prompt_text = fields.get("prompt_text") or ""
+    if prompt_text:
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 7, clean_text("Cerinta:"), ln=True)
+        pdf.set_font("Helvetica", size=10)
+        pdf.multi_cell(0, 5, clean_text(str(prompt_text)))
+        pdf.ln(2)
+
+    hanoi_state = metadata.get("initial_state")
+    if hanoi_state is not None:
+        _draw_hanoi_state(pdf, hanoi_state)
+    else:
+        _draw_matrix_grid(pdf, fields.get("data"))
+
+
+def create_evaluation_pdf(
+    question: Any,
+    user_answer: Any,
+    score: float,
+    feedback: str,
+    correct_answer: Any,
+) -> bytes:
+    """Create a one-question evaluation report PDF (score + feedback + solution)."""
+
+    fields = _extract_question_fields(question)
+    correct_explanation = fields.get("correct_explanation") or ""
+
+    pdf = ExamPDF(header_title="SmarTest - Evaluare")
+    pdf.add_page()
+
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, clean_text("Raport evaluare"), ln=True)
+    qid = fields.get("id") or ""
+    if qid:
+        pdf.set_font("Helvetica", size=10)
+        pdf.cell(0, 6, clean_text(f"ID: {qid}"), ln=True)
+    pdf.ln(2)
+
+    _render_question_context(pdf, fields)
+
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, clean_text("Rezultat:"), ln=True)
+    pdf.set_font("Helvetica", size=11)
+    try:
+        score_f = float(score)
+    except Exception:
+        score_f = 0.0
+    pdf.cell(0, 7, clean_text(f"Scor: {score_f:.2f}%"), ln=True)
+
+    fb = str(feedback or "").strip()
+    if fb:
+        pdf.set_font("Helvetica", size=10)
+        pdf.multi_cell(0, 5, clean_text(f"Feedback: {fb}"))
+    pdf.ln(2)
+
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, clean_text("Raspunsul tau:"), ln=True)
+    pdf.set_font("Courier", size=9)
+    ua_text = _answer_to_text(user_answer).strip() or "—"
+    pdf.multi_cell(0, 5, clean_text(ua_text))
+    pdf.ln(2)
+
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, clean_text("Raspuns corect:"), ln=True)
+    pdf.set_font("Courier", size=9)
+    ca = correct_answer if correct_answer is not None else fields.get("correct_answer")
+    ca_text = str(ca) if ca is not None else "—"
+    pdf.multi_cell(0, 5, clean_text(ca_text))
+
+    if str(correct_explanation).strip():
+        pdf.ln(1)
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 7, clean_text("Explicatie:"), ln=True)
+        pdf.set_font("Helvetica", size=10)
+        pdf.multi_cell(0, 5, clean_text(str(correct_explanation)))
+
+    return pdf.output(dest="S").encode("latin-1")
+
+
+def create_test_evaluation_pdf(test_session: Any) -> bytes:
+    """Create a test evaluation report (summary + page per question)."""
+
+    if isinstance(test_session, dict):
+        questions = list(test_session.get("questions") or [])
+        user_answers = dict(test_session.get("user_answers") or {})
+        scores = dict(test_session.get("scores") or {})
+        feedback_map = dict(test_session.get("feedback") or {})
+    else:
+        questions = list(getattr(test_session, "questions", []) or [])
+        user_answers = dict(getattr(test_session, "user_answers", {}) or {})
+        scores = dict(getattr(test_session, "scores", {}) or {})
+        feedback_map = dict(getattr(test_session, "feedback", {}) or {})
+
+    pdf = ExamPDF(header_title="SmarTest - Evaluare Test")
+    pdf.add_page()
+
+    total = len(questions)
+    score_sum = 0.0
+    for q in questions:
+        qid = getattr(q, "id", None) if not isinstance(q, dict) else q.get("id")
+        try:
+            score_sum += float(scores.get(qid, 0.0))
+        except Exception:
+            score_sum += 0.0
+    avg = (score_sum / total) if total else 0.0
+
+    pdf.set_font("Helvetica", "B", 12)
+    pdf.cell(0, 8, clean_text("Rezumat evaluare test"), ln=True)
+    pdf.set_font("Helvetica", size=11)
+    pdf.cell(0, 7, clean_text(f"Total intrebari: {total}"), ln=True)
+    pdf.cell(0, 7, clean_text(f"Scor mediu: {avg:.2f}%"), ln=True)
+    pdf.ln(2)
+
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.cell(0, 7, clean_text("Scoruri pe intrebari:"), ln=True)
+    pdf.set_font("Helvetica", size=10)
+
+    for idx, q in enumerate(questions, start=1):
+        fields = _extract_question_fields(q)
+        meta = fields.get("metadata") or {}
+        topic = meta.get("topic") or meta.get("ui_label") or fields.get("type") or ""
+        qid = fields.get("id")
+        try:
+            s = float(scores.get(qid, 0.0))
+        except Exception:
+            s = 0.0
+        pdf.multi_cell(0, 5, clean_text(f"{idx}. {topic}: {s:.2f}%"))
+
+    # Detailed pages
+    for idx, q in enumerate(questions, start=1):
+        fields = _extract_question_fields(q)
+        qid = fields.get("id")
+        ua = user_answers.get(qid)
+        try:
+            s = float(scores.get(qid, 0.0))
+        except Exception:
+            s = 0.0
+        fb = feedback_map.get(qid) or ""
+
+        pdf.add_page()
+        pdf.set_font("Helvetica", "B", 12)
+        pdf.cell(0, 8, clean_text(f"Intrebarea {idx}/{max(1, total)}"), ln=True)
+        pdf.ln(2)
+
+        _render_question_context(pdf, fields)
+
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 7, clean_text("Rezultat:"), ln=True)
+        pdf.set_font("Helvetica", size=11)
+        pdf.cell(0, 7, clean_text(f"Scor: {s:.2f}%"), ln=True)
+        if str(fb).strip():
+            pdf.set_font("Helvetica", size=10)
+            pdf.multi_cell(0, 5, clean_text(f"Feedback: {fb}"))
+        pdf.ln(2)
+
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 7, clean_text("Raspunsul tau:"), ln=True)
+        pdf.set_font("Courier", size=9)
+        pdf.multi_cell(0, 5, clean_text(_answer_to_text(ua).strip() or "—"))
+        pdf.ln(2)
+
+        pdf.set_font("Helvetica", "B", 11)
+        pdf.cell(0, 7, clean_text("Raspuns corect:"), ln=True)
+        pdf.set_font("Courier", size=9)
+        pdf.multi_cell(0, 5, clean_text(str(fields.get("correct_answer"))))
+
+        correct_explanation = fields.get("correct_explanation") or ""
+        if str(correct_explanation).strip():
+            pdf.ln(1)
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.cell(0, 7, clean_text("Explicatie:"), ln=True)
+            pdf.set_font("Helvetica", size=10)
+            pdf.multi_cell(0, 5, clean_text(str(correct_explanation)))
+
+    return pdf.output(dest="S").encode("latin-1")
