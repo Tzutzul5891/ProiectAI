@@ -20,7 +20,9 @@ try:
     from app.modules.games import NashGame
     from app.modules.search import NQueensProblem, KnightsTourProblem, TowerOfHanoiProblem
     from app.modules.graph_coloring import GraphColoringProblem, parse_coloring_text, evaluate_graph_coloring
+    from app.modules.strategy_choice import StrategyChoiceProblem
     from app.evaluator.semantic import evaluate_semantic
+    from app.evaluator.strategy_choice import evaluate_strategy_choice
     from app.models import TestSession
     from app.utils.pdf_generator import create_pdf, create_test_pdf
     from app.gui.components import (render_interactive_queens_board, board_to_text, check_queens_validity,
@@ -36,6 +38,7 @@ UI_LABEL_NQUEENS = "Căutare (N-Queens)"
 UI_LABEL_KNIGHTS = "Căutare (Turul Calului)"
 UI_LABEL_HANOI = "Căutare (Turnurile Hanoi)"
 UI_LABEL_GRAPH_COLORING = "CSP (Graph Coloring)"
+UI_LABEL_STRATEGY = "Teorie (Alegere Strategie)"
 
 
 def build_prompt_text(ui_label: str, *, data, metadata: dict, fallback_game=None) -> str:
@@ -110,6 +113,11 @@ TEST_TOPIC_REGISTRY = {
         "ui_label": UI_LABEL_GRAPH_COLORING,
         "factory": GraphColoringProblem,
     },
+    "Alegere Strategie (Cerința 1)": {
+        "chapter": "Search",
+        "ui_label": UI_LABEL_STRATEGY,
+        "factory": StrategyChoiceProblem,
+    },
 }
 
 def is_test_answered(question, answer) -> bool:
@@ -151,6 +159,14 @@ def is_test_answered(question, answer) -> bool:
             assignment = answer.get("assignment") or {}
             text = str(answer.get("text") or "")
             return bool(assignment) or bool(text.strip())
+        if isinstance(answer, str):
+            return bool(answer.strip())
+        return False
+
+    if ui_label == UI_LABEL_STRATEGY:
+        if isinstance(answer, dict):
+            chosen = str(answer.get("strategy") or answer.get("strategy_label") or "").strip()
+            return bool(chosen)
         if isinstance(answer, str):
             return bool(answer.strip())
         return False
@@ -276,6 +292,23 @@ def evaluate_test_question(question, answer) -> tuple[float, str, dict]:
             details = dict(details or {})
             details["parse_errors"] = parse_errors
             message = f"{message} • Probleme parsare: {len(parse_errors)}"
+        return float(score), str(message), details
+
+    if ui_label == UI_LABEL_STRATEGY:
+        if not isinstance(answer, dict):
+            # Best-effort: allow string answers (treat as chosen strategy).
+            answer = {"strategy": str(answer or ""), "justification": ""}
+
+        chosen = str(answer.get("strategy") or answer.get("strategy_label") or "").strip()
+        justification = str(answer.get("justification") or answer.get("text") or "").strip()
+
+        grading = (question.metadata or {}).get("strategy_choice") or {}
+        score, message, details = evaluate_strategy_choice(
+            chosen,
+            justification,
+            correct_strategy=str(question.correct_answer or ""),
+            grading=grading if isinstance(grading, dict) else {},
+        )
         return float(score), str(message), details
 
     return 0.0, "Tip de întrebare necunoscut.", {}
@@ -651,6 +684,12 @@ if app_mode == "Test (N întrebări)":
                 st.dataframe(df_board, use_container_width=True)
             except Exception:
                 st.write(current.data)
+        elif ui_label == UI_LABEL_STRATEGY:
+            try:
+                df_info = pd.DataFrame(current.data, columns=["Câmp", "Valoare"])
+                st.table(df_info)
+            except Exception:
+                st.write(current.data)
         else:
             try:
                 df_board = pd.DataFrame(current.data)
@@ -751,6 +790,42 @@ if app_mode == "Test (N întrebări)":
                     "text": user_text,
                     "mode": "dropdown",
                 }
+        elif ui_label == UI_LABEL_STRATEGY:
+            grading = (current.metadata or {}).get("strategy_choice") or {}
+            allowed = list(grading.get("allowed_strategies") or []) if isinstance(grading, dict) else []
+
+            st.info(
+                "Întrebarea asta este una de TEORIE: nu rezolvi instanța efectiv, ci alegi strategia potrivită.\n"
+                "Alegerea strategiei îți afectează DOAR scorul (nu schimbă generatorul/algoritmii).\n"
+                "Scor: 100% pe match exact al strategiei, parțial pentru opțiuni „aproape”. "
+                "Justificarea e folosită doar ca feedback (cuvinte-cheie), nu ca punctaj.\n"
+                "Vezi scorul când finalizezi testul; pentru răspunsul corect bifează „Arată și answer key în aplicație” în Rezultate."
+            )
+
+            placeholder = "— alege o strategie —"
+            options = [placeholder] + [str(x) for x in allowed if str(x).strip()]
+            select_key = f"test_{current.id}_strategy_select"
+
+            if select_key not in st.session_state:
+                existing = session.user_answers.get(current.id) or {}
+                existing_choice = ""
+                if isinstance(existing, dict):
+                    existing_choice = str(existing.get("strategy") or existing.get("strategy_label") or "")
+                st.session_state[select_key] = existing_choice if existing_choice in options else placeholder
+
+            selected = st.selectbox("Alege strategia:", options=options, key=select_key)
+            justification = st.text_area(
+                "Justificare (2–3 propoziții):",
+                key=answer_key,
+                height=120,
+            )
+
+            chosen = "" if selected == placeholder else str(selected)
+            session.user_answers[current.id] = {
+                "strategy": chosen,
+                "justification": justification,
+                "text": justification,
+            }
         else:
             user_answer = st.text_area("✍️ Răspunsul tău:", key=answer_key, height=140)
             session.user_answers[current.id] = user_answer

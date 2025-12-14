@@ -18,7 +18,34 @@ SmarTest este o aplicație locală pentru generare de probleme tip examen și ev
   - Turul Calului: validare mișcări + scor euristic local.
   - Hanoi: validare corectitudine + eficiență față de optim.
   - Graph Coloring: 0–100% (validare + scor parțial pe conflicte).
+- **Teorie (Cerința 1):** întrebări „Alegere Strategie” (strategie + justificare scurtă, scoring exact + parțial) (`app/modules/strategy_choice.py`, `app/evaluator/strategy_choice.py`).
 - **Export PDF:** generare subiect PDF (`app/utils/pdf_generator.py`).
+
+## 🧠 Teorie: „Alegere Strategie” (Cerința 1)
+
+Aceasta este o întrebare de **teorie**: primești o problemă (N‑Queens / Hanoi generalizat / Graph Coloring / Knight’s Tour) + o **instanță** (dimensiune, k, nr. tije etc.), iar tu trebuie să:
+
+1) **alegi o strategie** dintr-o listă fixă (dropdown în UI)  
+2) scrii o **justificare scurtă** (2–3 propoziții)
+
+Important: alegerea strategiei **nu pornește un algoritm** și **nu schimbă alte întrebări**. Te afectează doar prin **scorul** obținut la această întrebare.
+
+**Cum se generează**
+- Generatorul alege una dintre cele 4 familii de probleme + o instanță (`app/modules/strategy_choice.py`).
+- Pentru fiecare familie există un „gold answer” (strategie + 2–3 motive standard).
+
+**Cum se evaluează (fără LLM)**
+- `100%` dacă strategia aleasă este exact cea corectă (match pe label).
+- scor parțial dacă alegi o strategie „aproape” (ex: backtracking simplu vs backtracking cu MRV/Forward Checking).
+- justificarea este verificată opțional pe cuvinte‑cheie (doar pentru feedback; nu schimbă scorul by default).
+
+Evaluator: `app/evaluator/strategy_choice.py`
+
+**Cum o testezi în UI**
+- `streamlit run main.py`
+- Mod: **Test (N întrebări)** → la **Subiecte** bifează `Alegere Strategie (Cerința 1)` → generează test.
+- Completezi dropdown + justificare, apoi **Finalizează testul** ca să vezi scorul.
+- Pentru a vedea răspunsul corect, bifează **„Arată și answer key în aplicație”** în ecranul de rezultate sau descarcă **Answer Key (PDF)**.
 
 ## 🔌 Convenție: ce returnează un generator
 
