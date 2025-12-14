@@ -21,7 +21,9 @@ try:
     from app.modules.search import NQueensProblem, KnightsTourProblem, TowerOfHanoiProblem
     from app.modules.graph_coloring import GraphColoringProblem, parse_coloring_text, evaluate_graph_coloring
     from app.modules.csp import CSPInstanceProblem, list_csp_instances
+    from app.modules.adversarial import AlphaBetaTreeProblem, list_adversarial_trees
     from app.modules.strategy_choice import StrategyChoiceProblem
+    from app.evaluator.adversarial import evaluate_alpha_beta_answer
     from app.evaluator.csp import evaluate_csp_backtracking_answer
     from app.evaluator.semantic import evaluate_semantic
     from app.evaluator.strategy_choice import evaluate_strategy_choice
@@ -42,6 +44,7 @@ UI_LABEL_HANOI = "Căutare (Turnurile Hanoi)"
 UI_LABEL_GRAPH_COLORING = "CSP (Graph Coloring)"
 UI_LABEL_CSP_BT = "CSP (BT + FC/MRV/AC-3)"
 UI_LABEL_STRATEGY = "Teorie (Alegere Strategie)"
+UI_LABEL_ADVERSARIAL = "Adversarial (MinMax + Alpha-Beta)"
 
 
 def build_prompt_text(ui_label: str, *, data, metadata: dict, fallback_game=None) -> str:
@@ -87,6 +90,12 @@ def build_prompt_text(ui_label: str, *, data, metadata: dict, fallback_game=None
             f"aibă aceeași culoare. Culori permise: {colors_text}. (n={n})"
         )
 
+    if ui_label == UI_LABEL_ADVERSARIAL:
+        return (
+            "Cerința 4 — MinMax + Alpha-Beta: Pentru arborele dat, calculează valoarea din rădăcină și "
+            "numărul de frunze evaluate (vizitate efectiv) de algoritmul Alpha-Beta, în parcurgere stânga→dreapta."
+        )
+
     return ""
 
 
@@ -120,6 +129,11 @@ TEST_TOPIC_REGISTRY = {
         "chapter": "Search",
         "ui_label": UI_LABEL_STRATEGY,
         "factory": StrategyChoiceProblem,
+    },
+    "MinMax + Alpha-Beta (Cerința 4)": {
+        "chapter": "Adversarial",
+        "ui_label": UI_LABEL_ADVERSARIAL,
+        "factory": AlphaBetaTreeProblem,
     },
 }
 
@@ -170,6 +184,15 @@ def is_test_answered(question, answer) -> bool:
         if isinstance(answer, dict):
             chosen = str(answer.get("strategy") or answer.get("strategy_label") or "").strip()
             return bool(chosen)
+        if isinstance(answer, str):
+            return bool(answer.strip())
+        return False
+
+    if ui_label == UI_LABEL_ADVERSARIAL:
+        if isinstance(answer, dict):
+            root_val = str(answer.get("root_value") or "").strip()
+            leaves = str(answer.get("visited_leaves") or "").strip()
+            return bool(root_val) or bool(leaves)
         if isinstance(answer, str):
             return bool(answer.strip())
         return False
@@ -314,6 +337,28 @@ def evaluate_test_question(question, answer) -> tuple[float, str, dict]:
         )
         return float(score), str(message), details
 
+    if ui_label == UI_LABEL_ADVERSARIAL:
+        root_value_text = ""
+        visited_leaves_text = ""
+
+        if isinstance(answer, dict):
+            root_value_text = str(answer.get("root_value") or "")
+            visited_leaves_text = str(answer.get("visited_leaves") or "")
+        elif isinstance(answer, str):
+            parts = [p.strip() for p in str(answer).replace(",", " ").split() if p.strip()]
+            if len(parts) >= 1:
+                root_value_text = parts[0]
+            if len(parts) >= 2:
+                visited_leaves_text = parts[1]
+
+        expected = question.correct_answer if isinstance(question.correct_answer, dict) else None
+        score, message, details = evaluate_alpha_beta_answer(
+            root_value_text,
+            visited_leaves_text,
+            expected=expected,
+        )
+        return float(score), str(message), details
+
     return 0.0, "Tip de întrebare necunoscut.", {}
 
 
@@ -429,7 +474,15 @@ with st.sidebar:
     if app_mode == "O singură întrebare":
         problem_type = st.radio(
             "Alege Tipul Problemei:",
-            (UI_LABEL_NASH, UI_LABEL_NQUEENS, UI_LABEL_KNIGHTS, UI_LABEL_HANOI, UI_LABEL_GRAPH_COLORING, UI_LABEL_CSP_BT),
+            (
+                UI_LABEL_NASH,
+                UI_LABEL_NQUEENS,
+                UI_LABEL_KNIGHTS,
+                UI_LABEL_HANOI,
+                UI_LABEL_GRAPH_COLORING,
+                UI_LABEL_CSP_BT,
+                UI_LABEL_ADVERSARIAL,
+            ),
             key="single_problem_type",
         )
     else:
@@ -442,7 +495,7 @@ with st.sidebar:
         )
 
         if "Adversarial" in selected_chapters:
-            st.caption("Adversarial nu este implementat încă; este ignorat la generare.")
+            st.caption("Adversarial: disponibil MinMax + Alpha-Beta (Cerința 4).")
         if "CSP" in selected_chapters:
             st.caption("CSP: disponibil Graph Coloring.")
 
@@ -693,6 +746,18 @@ if app_mode == "Test (N întrebări)":
                 st.table(df_info)
             except Exception:
                 st.write(current.data)
+        elif ui_label == UI_LABEL_ADVERSARIAL:
+            st.caption("Parcurgere: stânga → dreapta (ordinea copiilor din arbore).")
+            try:
+                lines: list[str] = []
+                for row in (current.data or []):
+                    if isinstance(row, (list, tuple)) and row:
+                        lines.append(str(row[0]))
+                    else:
+                        lines.append(str(row))
+                st.code("\n".join(lines), language="text")
+            except Exception:
+                st.write(current.data)
         else:
             try:
                 df_board = pd.DataFrame(current.data)
@@ -829,6 +894,28 @@ if app_mode == "Test (N întrebări)":
                 "justification": justification,
                 "text": justification,
             }
+        elif ui_label == UI_LABEL_ADVERSARIAL:
+            st.info("Completează ambele câmpuri: valoarea din rădăcină și numărul de frunze evaluate de Alpha-Beta.")
+
+            val_key = f"test_{current.id}_ab_root_value"
+            leaves_key = f"test_{current.id}_ab_visited_leaves"
+
+            if val_key not in st.session_state or leaves_key not in st.session_state:
+                existing = session.user_answers.get(current.id) or {}
+                if isinstance(existing, dict):
+                    st.session_state[val_key] = str(existing.get("root_value") or "")
+                    st.session_state[leaves_key] = str(existing.get("visited_leaves") or "")
+                else:
+                    st.session_state[val_key] = ""
+                    st.session_state[leaves_key] = ""
+
+            root_value_text = st.text_input("Valoare în rădăcină:", key=val_key, placeholder="ex: 6")
+            visited_leaves_text = st.text_input("Număr frunze evaluate:", key=leaves_key, placeholder="ex: 9")
+
+            session.user_answers[current.id] = {
+                "root_value": root_value_text,
+                "visited_leaves": visited_leaves_text,
+            }
         else:
             user_answer = st.text_area("✍️ Răspunsul tău:", key=answer_key, height=140)
             session.user_answers[current.id] = user_answer
@@ -887,6 +974,8 @@ if st.session_state.problem_type != problem_type:
         st.session_state.game = GraphColoringProblem()
     elif problem_type == UI_LABEL_CSP_BT:
         st.session_state.game = None
+    elif problem_type == UI_LABEL_ADVERSARIAL:
+        st.session_state.game = None
     else:
         st.session_state.game = TowerOfHanoiProblem()
 
@@ -943,6 +1032,146 @@ with col_left:
                             st.session_state.user_feedback = ""
                             st.session_state["single_csp_bt_answer"] = ""
                             st.success("Instanță încărcată cu succes!")
+    elif problem_type == UI_LABEL_ADVERSARIAL:
+        st.markdown("### Arbori adversarial (Alpha-Beta)")
+
+        source_mode = st.radio(
+            "Sursă arbore:",
+            ("Predefinit", "Random"),
+            horizontal=True,
+            key="single_ab_source_mode",
+        )
+
+        if source_mode == "Predefinit":
+            tree_files = list_adversarial_trees()
+            if not tree_files:
+                st.warning("Nu am găsit arbori în `app/data/adversarial_trees/*.json`.")
+            else:
+                options = {p.stem: p for p in tree_files}
+                selected_name = st.selectbox(
+                    "Alege arborele:",
+                    options=list(options.keys()),
+                    key="single_ab_tree_select",
+                )
+                selected_path = options[selected_name]
+
+                if st.button("📥 Încarcă arborele", use_container_width=True):
+                    with st.spinner("Se încarcă arborele și se calculează rezultatul (Alpha-Beta)..."):
+                        try:
+                            gen = AlphaBetaTreeProblem(instance_path=selected_path)
+                            question = gen.generate_question(
+                                ui_label=problem_type,
+                                chapter="Adversarial",
+                                extra_metadata={
+                                    "topic": "MinMax + Alpha-Beta (Cerința 4)",
+                                    "instance_file": selected_path.name,
+                                },
+                            )
+                        except Exception as e:
+                            st.session_state.matrix = None
+                            st.session_state.correct_expl = ""
+                            st.session_state.user_feedback = ""
+                            st.session_state.question = None
+                            st.session_state.test_session = TestSession()
+                            st.error(f"Nu s-a putut încărca arborele: {e}")
+                        else:
+                            if not question.data:
+                                st.session_state.matrix = None
+                                st.session_state.correct_expl = ""
+                                st.session_state.user_feedback = ""
+                                st.session_state.question = None
+                                st.session_state.test_session = TestSession()
+                                st.error(
+                                    f"Nu s-a putut construi întrebarea: {question.correct_explanation or 'Eroare.'}"
+                                )
+                            else:
+                                st.session_state.question = question
+                                st.session_state.test_session = TestSession(questions=[question], current_index=0)
+                                st.session_state.matrix = question.data
+                                st.session_state.correct_expl = question.correct_explanation
+                                st.session_state.user_feedback = ""
+                                st.session_state["single_ab_root_value"] = ""
+                                st.session_state["single_ab_leaves"] = ""
+                                st.success("Arbore încărcat cu succes!")
+        else:
+            depth = int(
+                st.slider(
+                    "Adâncime (număr de muchii până la frunze):",
+                    min_value=1,
+                    max_value=4,
+                    value=3,
+                    step=1,
+                    key="single_ab_depth",
+                )
+            )
+            branching = int(
+                st.slider(
+                    "Factor de ramificare:",
+                    min_value=2,
+                    max_value=3,
+                    value=2,
+                    step=1,
+                    key="single_ab_branching",
+                )
+            )
+
+            col_vmin, col_vmax = st.columns(2)
+            with col_vmin:
+                value_min = int(st.number_input("Valoare minimă frunze:", value=-9, step=1, key="single_ab_vmin"))
+            with col_vmax:
+                value_max = int(st.number_input("Valoare maximă frunze:", value=9, step=1, key="single_ab_vmax"))
+
+            if st.button("🎲 Generează arbore random", use_container_width=True):
+                with st.spinner("Se generează arborele și se calculează rezultatul (Alpha-Beta)..."):
+                    try:
+                        gen = AlphaBetaTreeProblem(
+                            depth=depth,
+                            branching=branching,
+                            value_min=value_min,
+                            value_max=value_max,
+                        )
+                        question = gen.generate_question(
+                            ui_label=problem_type,
+                            chapter="Adversarial",
+                            extra_metadata={
+                                "topic": "MinMax + Alpha-Beta (Cerința 4)",
+                                "source": "random",
+                            },
+                        )
+                    except Exception as e:
+                        st.session_state.matrix = None
+                        st.session_state.correct_expl = ""
+                        st.session_state.user_feedback = ""
+                        st.session_state.question = None
+                        st.session_state.test_session = TestSession()
+                        st.error(f"Nu s-a putut genera arborele: {e}")
+                    else:
+                        if not question.data:
+                            st.session_state.matrix = None
+                            st.session_state.correct_expl = ""
+                            st.session_state.user_feedback = ""
+                            st.session_state.question = None
+                            st.session_state.test_session = TestSession()
+                            st.error(
+                                f"Nu s-a putut construi întrebarea: {question.correct_explanation or 'Eroare la generare.'}"
+                            )
+                        else:
+                            prompt_text = build_prompt_text(
+                                problem_type,
+                                data=question.data,
+                                metadata=question.metadata,
+                                fallback_game=gen,
+                            )
+                            if prompt_text:
+                                question = replace(question, prompt_text=prompt_text)
+                            st.session_state.question = question
+                            st.session_state.test_session = TestSession(questions=[question], current_index=0)
+                            st.session_state.matrix = question.data
+                            st.session_state.correct_expl = question.correct_explanation
+                            st.session_state.user_feedback = ""
+                            st.session_state["single_ab_root_value"] = ""
+                            st.session_state["single_ab_leaves"] = ""
+                            st.success("Arbore generat cu succes!")
     else:
         if st.button("🎲 Generează Întrebare Nouă", use_container_width=True):
             with st.spinner("Se rulează algoritmul generator..."):
@@ -1007,6 +1236,11 @@ with col_left:
                     "Se dă un graf neorientat (noduri 1..n) reprezentat prin matricea de adiacență de mai jos. "
                     f"Colorați nodurile folosind cel mult k={k} culori astfel încât două noduri adiacente să nu "
                     f"aibă aceeași culoare. Culori permise: {colors_text}. (n={n})"
+                )
+            elif problem_type == UI_LABEL_ADVERSARIAL:
+                pdf_req = (
+                    "Cerința 4 — MinMax + Alpha-Beta: Pentru arborele dat, calculează valoarea din rădăcină și "
+                    "numărul de frunze evaluate (vizitate efectiv) de Alpha-Beta, în parcurgere stânga→dreapta."
                 )
             else:  # Tower of Hanoi
                 num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
@@ -1195,6 +1429,36 @@ with col_right:
                 key="single_csp_bt_answer",
                 height=120,
             )
+
+        elif problem_type == UI_LABEL_ADVERSARIAL:
+            meta = question.metadata if question else {}
+            adv = (meta.get("adversarial") or {}) if isinstance(meta, dict) else {}
+            total_leaves = (adv.get("total_leaves") if isinstance(adv, dict) else None) or None
+
+            st.markdown("### Cerință:")
+            st.write(
+                "Pentru arborele de mai jos, calculează **valoarea din rădăcină** și "
+                "**numărul de frunze evaluate (vizitate efectiv)** când rulezi Minimax cu tăieri Alpha-Beta."
+            )
+            st.caption("Parcurgere: stânga → dreapta (ordinea copiilor din arbore).")
+            if total_leaves is not None:
+                st.info(f"Număr total frunze în arbore: {total_leaves}")
+
+            try:
+                lines: list[str] = []
+                for row in (st.session_state.matrix or []):
+                    if isinstance(row, (list, tuple)) and row:
+                        lines.append(str(row[0]))
+                    else:
+                        lines.append(str(row))
+                st.code("\n".join(lines), language="text")
+            except Exception:
+                st.write(st.session_state.matrix)
+
+            st.markdown("---")
+            st.markdown("### Răspunsul tău")
+            _ = st.text_input("Valoare în rădăcină:", key="single_ab_root_value", placeholder="ex: 6")
+            _ = st.text_input("Număr frunze evaluate:", key="single_ab_leaves", placeholder="ex: 9")
 
         else:  # Tower of Hanoi
             num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
@@ -1435,6 +1699,33 @@ with col_right:
                     with st.expander("❌ Variabile greșite (așteptat vs. primit)"):
                         for var, info in details["wrong"].items():
                             st.write(f"- {var}: așteptat `{info.get('expected')}`, primit `{info.get('got')}`")
+
+                with st.expander("🔍 Vezi Soluția (Gold Standard)"):
+                    st.info(st.session_state.correct_expl)
+                    if question and getattr(question, "correct_answer", None):
+                        st.write(question.correct_answer)
+
+        elif problem_type == UI_LABEL_ADVERSARIAL:
+            if st.button("✅ Verifică Răspunsul", type="primary"):
+                expected = getattr(question, "correct_answer", None) if question else None
+                score, msg, details = evaluate_alpha_beta_answer(
+                    st.session_state.get("single_ab_root_value", ""),
+                    st.session_state.get("single_ab_leaves", ""),
+                    expected=expected if isinstance(expected, dict) else None,
+                )
+
+                st.markdown(f"### Scor: **{score:.2f}%**")
+                if score >= 99.99:
+                    st.success(msg)
+                elif score >= 50:
+                    st.warning(msg)
+                else:
+                    st.error(msg)
+
+                if details.get("errors"):
+                    with st.expander("⚠️ Probleme de parsare"):
+                        for err in details["errors"]:
+                            st.write(f"- {err}")
 
                 with st.expander("🔍 Vezi Soluția (Gold Standard)"):
                     st.info(st.session_state.correct_expl)

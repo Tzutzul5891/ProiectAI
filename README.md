@@ -8,7 +8,8 @@ SmarTest este o aplicație locală pentru generare de probleme tip examen și ev
   - **Jocuri:** matrice 2x2 + detectare Echilibru Nash pur (`app/modules/games.py`).
   - **Căutare:** N-Queens, Turul Calului (5x5/6x6), Turnurile din Hanoi (3/4 tije, 3–5 discuri) (`app/modules/search.py`).
   - **CSP:** Graph Coloring (k-coloring) cu solver backtracking (`app/modules/graph_coloring.py`).
-  - **CSP (Cerința 3):** CSP generic + solver Backtracking cu opțiuni MRV / Forward Checking / AC-3, pe instanțe JSON predefinite (`app/modules/csp.py`, `app/data/csp_instances/*.json`).
+- **CSP (Cerința 3):** CSP generic + solver Backtracking cu opțiuni MRV / Forward Checking / AC-3, pe instanțe JSON predefinite (`app/modules/csp.py`, `app/data/csp_instances/*.json`).
+- **Adversarial (Cerința 4):** MinMax + Alpha-Beta pe arbori JSON (valoare la rădăcină + câte frunze sunt evaluate efectiv), cu evaluare exactă/parțială (`app/modules/adversarial.py`, `app/data/adversarial_trees/*.json`, `app/evaluator/adversarial.py`).
 - **UI Streamlit (interactiv):**
   - tablă interactivă N-Queens, Turul Calului și Turnurile din Hanoi (`app/gui/components.py`).
 - **Mod Test (multi-întrebări):**
@@ -72,6 +73,50 @@ Instanțe: `app/data/csp_instances/*.json` (poți adăuga oricâte).
 - Alege instanța din dropdown → **Încarcă instanța**
 - Completezi în format `X=valoare, Y=valoare` → **Verifică Răspunsul**
 - Opțional: descarci PDF-ul de subiect din stânga (**Descarcă Subiectul (PDF)**)
+
+## 🎮 Adversarial: MinMax + Alpha-Beta (Cerința 4)
+
+În modul acesta primești un **arbore de joc** (noduri **MAX/MIN** + frunze cu valori) și trebuie să calculezi:
+
+1) **valoarea din rădăcină** (rezultatul Minimax)  
+2) **câte frunze sunt evaluate efectiv** de Alpha-Beta (cele din subarborii tăiați NU se numără)
+
+Important: parcurgerea este **stânga → dreapta** (ordinea copiilor din JSON).
+
+### Unde sunt arborii
+
+Instanțe: `app/data/adversarial_trees/*.json`
+
+### Format JSON (minim)
+
+```json
+{
+  "id": "demo",
+  "title": "optional",
+  "traversal": "left-to-right",
+  "root": {
+    "type": "MAX",
+    "children": [
+      { "type": "MIN", "children": [{ "id": "L1", "value": 3 }, { "id": "L2", "value": 5 }] },
+      { "type": "MIN", "children": [{ "id": "L3", "value": 2 }, { "id": "L4", "value": 9 }] }
+    ]
+  }
+}
+```
+
+### Cum testezi în UI
+
+- `streamlit run main.py`
+- Mod: **O singură întrebare**
+- Tip problemă: **`Adversarial (MinMax + Alpha-Beta)`**
+  - **Predefinit:** alegi un arbore → **Încarcă arborele**
+  - **Random:** alegi (adâncime, branching, interval valori) → **Generează arbore random**
+- Completezi: **valoare în rădăcină** + **număr frunze evaluate** → **Verifică Răspunsul**
+
+Scor:
+- `100%` dacă ambele sunt corecte
+- `50%` dacă doar una dintre ele e corectă
+- `0%` altfel
 
 ## 🧠 Teorie: „Alegere Strategie” (Cerința 1)
 
@@ -164,6 +209,6 @@ ProiectAI/
 ## 🧭 Ce urmează
 
 - Mutarea logicii de enunț/PDF pe `ProblemInstance.prompt` (mai puțin duplicat în `main.py`).
-- Extindere instanțe CSP / constrângeri + implementări reale în `app/modules/adversarial.py`.
+- Extindere instanțe CSP / constrângeri.
 - `app/utils/pdf_parser.py`: parsare PDF -> structură internă (dacă e necesar).
 - Teste minimale pentru generatoare/evaluatori (local, determinist).
