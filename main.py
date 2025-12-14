@@ -28,7 +28,16 @@ try:
     from app.evaluator.semantic import evaluate_semantic
     from app.evaluator.strategy_choice import evaluate_strategy_choice
     from app.models import TestSession
+    from app.utils.helpers import (
+        extract_csp_var_value_pairs,
+        extract_graph_coloring_mapping,
+        extract_minmax_value_and_leaves,
+        extract_nash_coordinates,
+        format_csp_pairs,
+        format_graph_coloring_mapping,
+    )
     from app.utils.pdf_generator import create_pdf, create_test_pdf
+    from app.utils.pdf_parser import extract_text_from_pdf
     from app.gui.components import (render_interactive_queens_board, board_to_text, check_queens_validity,
                                      render_interactive_knights_board, knights_board_to_text, check_knights_tour_validity,
                                      render_interactive_hanoi, hanoi_moves_to_text, check_hanoi_validity,
@@ -1354,11 +1363,38 @@ with col_right:
 
             input_mode = st.radio(
                 "Mod răspuns:",
-                ("Dropdown", "Text"),
+                ("Dropdown", "Text", "PDF"),
                 horizontal=True,
                 key="single_graph_coloring_mode",
             )
-            if input_mode == "Text":
+            if input_mode == "PDF":
+                uploaded = st.file_uploader(
+                    "📄 Încarcă PDF răspuns:",
+                    type=["pdf"],
+                    key="single_graph_coloring_pdf",
+                )
+                pdf_text = ""
+                if uploaded is not None:
+                    try:
+                        pdf_text = extract_text_from_pdf(uploaded.getvalue())
+                    except Exception as e:
+                        st.error(f"Nu am putut citi PDF-ul: {e}")
+                        pdf_text = ""
+
+                graph_assignment = extract_graph_coloring_mapping(pdf_text, n=n, color_names=color_names)
+                user_answer = graph_coloring_to_text(graph_assignment) or format_graph_coloring_mapping(graph_assignment)
+
+                if uploaded is not None:
+                    with st.expander("🧾 Text extras din PDF"):
+                        st.code(pdf_text or "—", language="text")
+                if uploaded is not None and not graph_assignment:
+                    st.warning("Nu am găsit o mapare nod→culoare în PDF. Exemplu: `1:R, 2:G, 3:B`.")
+
+                if user_answer:
+                    with st.expander("📝 Răspuns extras (text)"):
+                        st.write(user_answer)
+
+            elif input_mode == "Text":
                 user_answer = st.text_area(
                     "✍️ Răspunsul tău (ex: 1:R, 2:G, 3:B):",
                     key="single_graph_coloring_text",
@@ -1424,6 +1460,43 @@ with col_right:
             if remaining_vars:
                 st.info("Variabile de completat: " + ", ".join(remaining_vars))
 
+            csp_answer_mode = st.radio(
+                "Mod răspuns:",
+                ("Text", "PDF"),
+                horizontal=True,
+                key="single_csp_bt_answer_mode",
+            )
+
+            if csp_answer_mode == "PDF":
+                uploaded = st.file_uploader(
+                    "📄 Încarcă PDF răspuns:",
+                    type=["pdf"],
+                    key="single_csp_bt_pdf",
+                )
+                pdf_text = ""
+                extracted_answer = ""
+                if uploaded is not None:
+                    try:
+                        pdf_text = extract_text_from_pdf(uploaded.getvalue())
+                    except Exception as e:
+                        st.error(f"Nu am putut citi PDF-ul: {e}")
+                        pdf_text = ""
+
+                    pairs = extract_csp_var_value_pairs(pdf_text, allowed_variables=variables)
+                    extracted_answer = format_csp_pairs(pairs)
+                    st.session_state["single_csp_bt_answer_from_pdf"] = extracted_answer
+
+                    if extracted_answer and not str(st.session_state.get("single_csp_bt_answer") or "").strip():
+                        st.session_state["single_csp_bt_answer"] = extracted_answer
+
+                    with st.expander("🧾 Text extras din PDF"):
+                        st.code(pdf_text or "—", language="text")
+
+                    if extracted_answer:
+                        st.caption(f"Răspuns extras: {extracted_answer}")
+                    else:
+                        st.warning("Nu am găsit perechi `Var=Val` în PDF (pentru variabilele instanței).")
+
             user_answer = st.text_area(
                 "✍️ Asignarea ta (ex: X=1, Y=2):",
                 key="single_csp_bt_answer",
@@ -1457,6 +1530,40 @@ with col_right:
 
             st.markdown("---")
             st.markdown("### Răspunsul tău")
+
+            ab_answer_mode = st.radio(
+                "Mod răspuns:",
+                ("Text", "PDF"),
+                horizontal=True,
+                key="single_ab_answer_mode",
+            )
+
+            if ab_answer_mode == "PDF":
+                uploaded = st.file_uploader(
+                    "📄 Încarcă PDF răspuns:",
+                    type=["pdf"],
+                    key="single_ab_answer_pdf",
+                )
+                pdf_text = ""
+                if uploaded is not None:
+                    try:
+                        pdf_text = extract_text_from_pdf(uploaded.getvalue())
+                    except Exception as e:
+                        st.error(f"Nu am putut citi PDF-ul: {e}")
+                        pdf_text = ""
+
+                    value, leaves = extract_minmax_value_and_leaves(pdf_text)
+                    if value is not None:
+                        st.session_state["single_ab_root_value"] = value
+                    if leaves is not None:
+                        st.session_state["single_ab_leaves"] = leaves
+
+                    with st.expander("🧾 Text extras din PDF"):
+                        st.code(pdf_text or "—", language="text")
+
+                    if value is None and leaves is None:
+                        st.warning("Nu am găsit câmpuri `value=...` / `leaves=...` în PDF.")
+
             _ = st.text_input("Valoare în rădăcină:", key="single_ab_root_value", placeholder="ex: 6")
             _ = st.text_input("Număr frunze evaluate:", key="single_ab_leaves", placeholder="ex: 9")
 
@@ -1485,24 +1592,102 @@ with col_right:
         st.markdown("---")
         
         if problem_type == UI_LABEL_NASH:
-            # Keep text area for Nash equilibrium
-            user_answer = st.text_area("✍️ Răspunsul tău:", height=100, placeholder="Scrie explicația aici...")
+            nash_answer_mode = st.radio(
+                "Mod răspuns:",
+                ("Text", "PDF"),
+                horizontal=True,
+                key="single_nash_answer_mode",
+            )
+
+            if nash_answer_mode == "PDF":
+                uploaded = st.file_uploader(
+                    "📄 Încarcă PDF răspuns:",
+                    type=["pdf"],
+                    key="single_nash_answer_pdf",
+                )
+                pdf_text = ""
+                if uploaded is not None:
+                    try:
+                        pdf_text = extract_text_from_pdf(uploaded.getvalue())
+                    except Exception as e:
+                        st.error(f"Nu am putut citi PDF-ul: {e}")
+                        pdf_text = ""
+
+                    coords = extract_nash_coordinates(pdf_text)
+                    extracted = ", ".join(coords)
+                    st.session_state["single_nash_answer_from_pdf"] = extracted
+                    if extracted and not str(st.session_state.get("single_nash_answer") or "").strip():
+                        st.session_state["single_nash_answer"] = extracted
+
+                    with st.expander("🧾 Text extras din PDF"):
+                        st.code(pdf_text or "—", language="text")
+
+                    if not coords:
+                        st.warning("Nu am găsit coordonate de forma `Lx-Cy` în PDF.")
+
+            # Always keep an editable textbox (PDF can pre-fill it).
+            user_answer = st.text_area(
+                "✍️ Răspunsul tău:",
+                key="single_nash_answer",
+                height=100,
+                placeholder="Scrie explicația aici (sau încarcă un PDF).",
+            )
             
             if st.button("✅ Verifică Răspunsul", type="primary"):
                 if not user_answer:
                     st.warning("Te rog scrie un răspuns înainte de verificare.")
                 else:
-                    with st.spinner("AI-ul analizează răspunsul tău..."):
-                        score, feedback = evaluate_semantic(user_answer, st.session_state.correct_expl)
-                    
-                    st.markdown(f"### Scor Semantic: **{score:.2f}%**")
-                    
-                    if score > 75:
-                        st.success(f"Feedback: {feedback}")
-                    elif score > 40:
-                        st.warning(f"Feedback: {feedback}")
+                    if nash_answer_mode == "PDF":
+                        expected = set(extract_nash_coordinates(st.session_state.correct_expl))
+                        effective_answer = str(st.session_state.get("single_nash_answer_from_pdf") or "").strip() or user_answer
+                        got = set(extract_nash_coordinates(effective_answer))
+
+                        if expected:
+                            correct = expected & got
+                            missing = expected - got
+                            extra = got - expected
+
+                            score = 100.0 * (len(correct) / max(1, len(expected)))
+                            if extra:
+                                score = max(0.0, float(score) - 10.0 * len(extra))
+
+                            st.markdown(f"### Scor: **{score:.2f}%**")
+                            if score >= 99.99 and not extra:
+                                st.success("✅ Corect (coordonate).")
+                            elif score > 0:
+                                st.warning("Parțial (coordonate).")
+                            else:
+                                st.error("❌ Incorect (coordonate).")
+
+                            with st.expander("🔎 Detalii coordonate"):
+                                st.write(f"Așteptat: {', '.join(sorted(expected))}")
+                                st.write(f"Primit: {', '.join(sorted(got)) or '—'}")
+                                if missing:
+                                    st.write(f"Lipsește: {', '.join(sorted(missing))}")
+                                if extra:
+                                    st.write(f"În plus: {', '.join(sorted(extra))}")
+                        else:
+                            # No equilibrium case.
+                            lower = str(effective_answer).lower()
+                            ok = ("nu" in lower) and ("echilibru" in lower or "nash" in lower)
+                            score = 100.0 if ok else 0.0
+                            st.markdown(f"### Scor: **{score:.2f}%**")
+                            if ok:
+                                st.success("✅ Corect: ai identificat că nu există echilibru Nash pur.")
+                            else:
+                                st.error("❌ Incorect: răspunsul nu indică lipsa unui echilibru Nash pur.")
                     else:
-                        st.error(f"Feedback: {feedback}")
+                        with st.spinner("AI-ul analizează răspunsul tău..."):
+                            score, feedback = evaluate_semantic(user_answer, st.session_state.correct_expl)
+
+                        st.markdown(f"### Scor Semantic: **{score:.2f}%**")
+
+                        if score > 75:
+                            st.success(f"Feedback: {feedback}")
+                        elif score > 40:
+                            st.warning(f"Feedback: {feedback}")
+                        else:
+                            st.error(f"Feedback: {feedback}")
                     
                     with st.expander("🔍 Vezi Soluția Algoritmică (Gold Standard)"):
                         st.info(st.session_state.correct_expl)
@@ -1670,8 +1855,12 @@ with col_right:
                 domains = dict(csp_meta.get("domains") or {})
                 partial = dict(metadata.get("partial_assignment") or {})
 
+                answer_text = str(st.session_state.get("single_csp_bt_answer") or "")
+                if st.session_state.get("single_csp_bt_answer_mode") == "PDF":
+                    answer_text = str(st.session_state.get("single_csp_bt_answer_from_pdf") or answer_text)
+
                 score, msg, details = evaluate_csp_backtracking_answer(
-                    st.session_state.get("single_csp_bt_answer", ""),
+                    answer_text,
                     variables=variables,
                     domains=domains,
                     partial_assignment=partial,

@@ -22,6 +22,7 @@ SmarTest este o aplicație locală pentru generare de probleme tip examen și ev
   - Graph Coloring: 0–100% (validare + scor parțial pe conflicte).
 - **Teorie (Cerința 1):** întrebări „Alegere Strategie” (strategie + justificare scurtă, scoring exact + parțial) (`app/modules/strategy_choice.py`, `app/evaluator/strategy_choice.py`).
 - **Export PDF:** generare subiect PDF (`app/utils/pdf_generator.py`).
+- **Import PDF răspuns:** încărcare PDF + extragere text (fără OCR) + evaluare pentru Nash/CSP/Graph Coloring/MinMax (`app/utils/pdf_parser.py`, `app/utils/helpers.py`, `main.py`).
 
 ## 🧩 CSP: Backtracking cu FC/MRV/AC-3 (Cerința 3)
 
@@ -183,6 +184,22 @@ pip install -r requirements.txt
 streamlit run main.py
 ```
 
+## 📄 Import răspuns din PDF (fără OCR)
+
+Aplicația poate **citi textul embedded** dintr-un PDF încărcat (de ex. un PDF în care ai scris/ai lipit răspunsurile ca text).  
+Nu funcționează pentru scanări/poze/handwriting fără OCR.
+
+**Cum testezi rapid**
+- Rulezi `streamlit run main.py`
+- Mod: **O singură întrebare**
+- Generezi o întrebare, apoi la **Mod răspuns** alegi **PDF** și încarci fișierul.
+
+**Formate recunoscute (recomandat)**
+- Nash: `L1-C2` (poți avea mai multe coordonate, separate prin virgulă; în modul PDF evaluarea este pe coordonate)
+- CSP (Cerința 3): `A=1, B=2, C=3`
+- Graph Coloring: `1:R, 2:G, 3:B` (acceptă și indici: `1:1, 2:2, ...` dacă sunt `k` culori)
+- MinMax + Alpha-Beta: `value=6 leaves=9` (acceptă și „valoare: 6”, „frunze: 9”)
+
 ## ⚙️ Opțiuni offline / determinism
 
 - **Fără download de modele (offline strict):** `SMARTEST_LOCAL_MODELS_ONLY=1`
@@ -210,5 +227,5 @@ ProiectAI/
 
 - Mutarea logicii de enunț/PDF pe `ProblemInstance.prompt` (mai puțin duplicat în `main.py`).
 - Extindere instanțe CSP / constrângeri.
-- `app/utils/pdf_parser.py`: parsare PDF -> structură internă (dacă e necesar).
+- OCR opțional pentru PDF-uri scanate (dacă va fi nevoie).
 - Teste minimale pentru generatoare/evaluatori (local, determinist).
