@@ -8,6 +8,7 @@ SmarTest este o aplicație locală pentru generare de probleme tip examen și ev
   - **Jocuri:** matrice 2x2 + detectare Echilibru Nash pur (`app/modules/games.py`).
   - **Căutare:** N-Queens, Turul Calului (5x5/6x6), Turnurile din Hanoi (3/4 tije, 3–5 discuri) (`app/modules/search.py`).
   - **CSP:** Graph Coloring (k-coloring) cu solver backtracking (`app/modules/graph_coloring.py`).
+  - **CSP (Cerința 3):** CSP generic + solver Backtracking cu opțiuni MRV / Forward Checking / AC-3, pe instanțe JSON predefinite (`app/modules/csp.py`, `app/data/csp_instances/*.json`).
 - **UI Streamlit (interactiv):**
   - tablă interactivă N-Queens, Turul Calului și Turnurile din Hanoi (`app/gui/components.py`).
 - **Mod Test (multi-întrebări):**
@@ -20,6 +21,57 @@ SmarTest este o aplicație locală pentru generare de probleme tip examen și ev
   - Graph Coloring: 0–100% (validare + scor parțial pe conflicte).
 - **Teorie (Cerința 1):** întrebări „Alegere Strategie” (strategie + justificare scurtă, scoring exact + parțial) (`app/modules/strategy_choice.py`, `app/evaluator/strategy_choice.py`).
 - **Export PDF:** generare subiect PDF (`app/utils/pdf_generator.py`).
+
+## 🧩 CSP: Backtracking cu FC/MRV/AC-3 (Cerința 3)
+
+În modul acesta primești un CSP **predefinit** (din fișiere JSON) cu:
+- variabile + domenii
+- constrângeri (ex: `all_different`, constrângeri binare)
+- asignare parțială
+- metoda cerută (MRV / FC / AC-3)
+
+Tu completezi **doar variabilele rămase**, iar aplicația calculează soluția determinist (BT + opțiunile cerute) și îți dă scor `0–100` pe potrivirea exactă per variabilă.
+
+### Unde sunt instanțele
+
+Instanțe: `app/data/csp_instances/*.json` (poți adăuga oricâte).
+
+### Format JSON (minim)
+
+```json
+{
+  "id": "exemplu_1",
+  "variables": ["A", "B", "C"],
+  "domains": { "A": [1,2,3], "B": [1,2,3], "C": [1,2,3] },
+  "constraints": [
+    { "type": "all_different", "vars": ["A","B","C"] },
+    { "type": "less_than", "vars": ["A","B"] }
+  ],
+  "partial_assignment": { "B": 2 },
+  "method": "MRV/FC/AC-3"
+}
+```
+
+### Constrângeri suportate (în `constraints`)
+
+- `all_different` (n-ary, se descompune în `!=` pentru AC-3)
+- binare: `not_equal`, `equal`, `less_than`, `greater_than`
+- binare numerice: `sum_equals`, `sum_not_equals`, `abs_diff_equals`, `abs_diff_not_equals`
+- tabele: `allowed_pairs`, `forbidden_pairs`
+
+### Opțiuni solver (în instanță)
+
+- `method`: string sau listă (ex: `"MRV/FC/AC-3"` sau `["MRV","FC","AC-3"]`)
+- opțional `ac3_mode`: `preprocess` / `interleaved` / `both` (pentru AC-3 ca preprocesare și/sau intercalat - MAC)
+
+### Cum testezi în UI
+
+- `streamlit run main.py`
+- Mod: **O singură întrebare**
+- Tip problemă: **`CSP (BT + FC/MRV/AC-3)`**
+- Alege instanța din dropdown → **Încarcă instanța**
+- Completezi în format `X=valoare, Y=valoare` → **Verifică Răspunsul**
+- Opțional: descarci PDF-ul de subiect din stânga (**Descarcă Subiectul (PDF)**)
 
 ## 🧠 Teorie: „Alegere Strategie” (Cerința 1)
 
@@ -112,6 +164,6 @@ ProiectAI/
 ## 🧭 Ce urmează
 
 - Mutarea logicii de enunț/PDF pe `ProblemInstance.prompt` (mai puțin duplicat în `main.py`).
-- Implementări reale în `app/modules/csp.py` și `app/modules/adversarial.py`.
+- Extindere instanțe CSP / constrângeri + implementări reale în `app/modules/adversarial.py`.
 - `app/utils/pdf_parser.py`: parsare PDF -> structură internă (dacă e necesar).
 - Teste minimale pentru generatoare/evaluatori (local, determinist).

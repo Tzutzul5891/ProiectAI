@@ -1,0 +1,19 @@
+{
+  "id": "map_coloring_mini",
+  "title": "Map coloring mini (3 regiuni)",
+  "description": "Exemplu cu domenii simbolice (culori) si constrangeri !=.",
+  "variables": ["WA", "NT", "SA"],
+  "domains": {
+    "WA": ["R", "G", "B"],
+    "NT": ["R", "G", "B"],
+    "SA": ["R", "G", "B"]
+  },
+  "constraints": [
+    { "type": "not_equal", "vars": ["WA", "NT"] },
+    { "type": "not_equal", "vars": ["WA", "SA"] },
+    { "type": "not_equal", "vars": ["NT", "SA"] }
+  ],
+  "partial_assignment": { "WA": "R", "NT": "G" },
+  "method": "MRV/FC"
+}
+

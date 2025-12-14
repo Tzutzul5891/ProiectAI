@@ -1,0 +1,22 @@
+{
+  "id": "sum4_unique",
+  "title": "Sume + all-different (4 variabile)",
+  "description": "Constrangeri binare (suma, inegalitati) + all-different. Are solutie unica.",
+  "variables": ["A", "B", "C", "D"],
+  "domains": {
+    "A": [1, 2, 3, 4],
+    "B": [1, 2, 3, 4],
+    "C": [1, 2, 3, 4],
+    "D": [1, 2, 3, 4]
+  },
+  "constraints": [
+    { "type": "all_different", "vars": ["A", "B", "C", "D"] },
+    { "type": "sum_equals", "vars": ["A", "B"], "sum": 5 },
+    { "type": "sum_equals", "vars": ["C", "D"], "sum": 5 },
+    { "type": "less_than", "vars": ["B", "C"] },
+    { "type": "less_than", "vars": ["C", "D"] }
+  ],
+  "partial_assignment": { "B": 1 },
+  "method": ["MRV", "FC", "AC-3"]
+}
+

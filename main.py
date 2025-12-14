@@ -20,7 +20,9 @@ try:
     from app.modules.games import NashGame
     from app.modules.search import NQueensProblem, KnightsTourProblem, TowerOfHanoiProblem
     from app.modules.graph_coloring import GraphColoringProblem, parse_coloring_text, evaluate_graph_coloring
+    from app.modules.csp import CSPInstanceProblem, list_csp_instances
     from app.modules.strategy_choice import StrategyChoiceProblem
+    from app.evaluator.csp import evaluate_csp_backtracking_answer
     from app.evaluator.semantic import evaluate_semantic
     from app.evaluator.strategy_choice import evaluate_strategy_choice
     from app.models import TestSession
@@ -38,6 +40,7 @@ UI_LABEL_NQUEENS = "Căutare (N-Queens)"
 UI_LABEL_KNIGHTS = "Căutare (Turul Calului)"
 UI_LABEL_HANOI = "Căutare (Turnurile Hanoi)"
 UI_LABEL_GRAPH_COLORING = "CSP (Graph Coloring)"
+UI_LABEL_CSP_BT = "CSP (BT + FC/MRV/AC-3)"
 UI_LABEL_STRATEGY = "Teorie (Alegere Strategie)"
 
 
@@ -426,7 +429,7 @@ with st.sidebar:
     if app_mode == "O singură întrebare":
         problem_type = st.radio(
             "Alege Tipul Problemei:",
-            (UI_LABEL_NASH, UI_LABEL_NQUEENS, UI_LABEL_KNIGHTS, UI_LABEL_HANOI, UI_LABEL_GRAPH_COLORING),
+            (UI_LABEL_NASH, UI_LABEL_NQUEENS, UI_LABEL_KNIGHTS, UI_LABEL_HANOI, UI_LABEL_GRAPH_COLORING, UI_LABEL_CSP_BT),
             key="single_problem_type",
         )
     else:
@@ -882,6 +885,8 @@ if st.session_state.problem_type != problem_type:
         st.session_state.game = TowerOfHanoiProblem()
     elif problem_type == UI_LABEL_GRAPH_COLORING:
         st.session_state.game = GraphColoringProblem()
+    elif problem_type == UI_LABEL_CSP_BT:
+        st.session_state.game = None
     else:
         st.session_state.game = TowerOfHanoiProblem()
 
@@ -889,41 +894,92 @@ col_left, col_right = st.columns([1, 2])
 
 with col_left:
     st.subheader("1. Generare & Export")
-    
-    if st.button("🎲 Generează Întrebare Nouă", use_container_width=True):
-        with st.spinner("Se rulează algoritmul generator..."):
-            try:
-                question = st.session_state.game.generate_question(ui_label=problem_type)
-            except Exception as e:
-                st.session_state.matrix = None
-                st.session_state.correct_expl = ""
-                st.session_state.user_feedback = ""
-                st.session_state.question = None
-                st.session_state.test_session = TestSession()
-                st.error(f"Nu s-a putut genera problema: {e}")
-            else:
-                if not question.data:
+
+    if problem_type == UI_LABEL_CSP_BT:
+        st.markdown("### Instanțe CSP predefinite")
+        instance_files = list_csp_instances()
+        if not instance_files:
+            st.warning("Nu am găsit instanțe CSP în `app/data/csp_instances/*.json`.")
+        else:
+            options = {p.stem: p for p in instance_files}
+            selected_name = st.selectbox(
+                "Alege instanța:",
+                options=list(options.keys()),
+                key="single_csp_instance_select",
+            )
+            selected_path = options[selected_name]
+
+            if st.button("📥 Încarcă instanța", use_container_width=True):
+                with st.spinner("Se încarcă instanța și se calculează soluția (BT)..."):
+                    try:
+                        gen = CSPInstanceProblem(instance_path=selected_path)
+                        question = gen.generate_question(
+                            ui_label=problem_type,
+                            chapter="CSP",
+                            extra_metadata={"topic": "CSP (Cerința 3)", "instance_file": selected_path.name},
+                        )
+                    except Exception as e:
+                        st.session_state.matrix = None
+                        st.session_state.correct_expl = ""
+                        st.session_state.user_feedback = ""
+                        st.session_state.question = None
+                        st.session_state.test_session = TestSession()
+                        st.error(f"Nu s-a putut încărca instanța: {e}")
+                    else:
+                        if not question.data:
+                            st.session_state.matrix = None
+                            st.session_state.correct_expl = ""
+                            st.session_state.user_feedback = ""
+                            st.session_state.question = None
+                            st.session_state.test_session = TestSession()
+                            st.error(
+                                f"Nu s-a putut construi întrebarea: {question.correct_explanation or 'Eroare.'}"
+                            )
+                        else:
+                            st.session_state.question = question
+                            st.session_state.test_session = TestSession(questions=[question], current_index=0)
+                            st.session_state.matrix = question.data
+                            st.session_state.correct_expl = question.correct_explanation
+                            st.session_state.user_feedback = ""
+                            st.session_state["single_csp_bt_answer"] = ""
+                            st.success("Instanță încărcată cu succes!")
+    else:
+        if st.button("🎲 Generează Întrebare Nouă", use_container_width=True):
+            with st.spinner("Se rulează algoritmul generator..."):
+                try:
+                    question = st.session_state.game.generate_question(ui_label=problem_type)
+                except Exception as e:
                     st.session_state.matrix = None
                     st.session_state.correct_expl = ""
                     st.session_state.user_feedback = ""
                     st.session_state.question = None
                     st.session_state.test_session = TestSession()
-                    st.error(f"Nu s-a putut genera problema: {question.correct_explanation or 'Eroare la generare.'}")
+                    st.error(f"Nu s-a putut genera problema: {e}")
                 else:
-                    prompt_text = build_prompt_text(
-                        problem_type,
-                        data=question.data,
-                        metadata=question.metadata,
-                        fallback_game=st.session_state.game,
-                    )
-                    if prompt_text:
-                        question = replace(question, prompt_text=prompt_text)
-                    st.session_state.question = question
-                    st.session_state.test_session = TestSession(questions=[question], current_index=0)
-                    st.session_state.matrix = question.data
-                    st.session_state.correct_expl = question.correct_explanation
-                    st.session_state.user_feedback = ""
-                    st.success("Problemă generată cu succes!")
+                    if not question.data:
+                        st.session_state.matrix = None
+                        st.session_state.correct_expl = ""
+                        st.session_state.user_feedback = ""
+                        st.session_state.question = None
+                        st.session_state.test_session = TestSession()
+                        st.error(
+                            f"Nu s-a putut genera problema: {question.correct_explanation or 'Eroare la generare.'}"
+                        )
+                    else:
+                        prompt_text = build_prompt_text(
+                            problem_type,
+                            data=question.data,
+                            metadata=question.metadata,
+                            fallback_game=st.session_state.game,
+                        )
+                        if prompt_text:
+                            question = replace(question, prompt_text=prompt_text)
+                        st.session_state.question = question
+                        st.session_state.test_session = TestSession(questions=[question], current_index=0)
+                        st.session_state.matrix = question.data
+                        st.session_state.correct_expl = question.correct_explanation
+                        st.session_state.user_feedback = ""
+                        st.success("Problemă generată cu succes!")
 
     if st.session_state.matrix:
         st.write("---")
@@ -1089,6 +1145,56 @@ with col_right:
                 user_answer = graph_coloring_to_text(graph_assignment)
                 with st.expander("📝 Vezi răspunsul tău (text)"):
                     st.write(user_answer or "Nu ai asignat încă nicio culoare.")
+
+        elif problem_type == UI_LABEL_CSP_BT:
+            metadata = question.metadata if question else {}
+            csp_meta = metadata.get("csp") or {}
+            variables = list(csp_meta.get("variables") or [])
+            domains = dict(csp_meta.get("domains") or {})
+            partial = dict(metadata.get("partial_assignment") or {})
+            remaining_vars = list(metadata.get("remaining_variables") or [v for v in variables if v not in partial])
+
+            solver_options = metadata.get("solver_options") or {}
+            method_parts = ["BT"]
+            if solver_options.get("mrv"):
+                method_parts.append("MRV")
+            if solver_options.get("forward_checking"):
+                method_parts.append("FC")
+            if solver_options.get("ac3_preprocess") or solver_options.get("ac3_interleaved"):
+                if solver_options.get("ac3_preprocess") and solver_options.get("ac3_interleaved"):
+                    method_parts.append("AC-3(pre+mac)")
+                elif solver_options.get("ac3_interleaved"):
+                    method_parts.append("AC-3(mac)")
+                else:
+                    method_parts.append("AC-3(pre)")
+
+            st.markdown("### Cerință:")
+            title = metadata.get("csp_instance_title") or metadata.get("csp_instance_id") or ""
+            if title:
+                st.write(f"Instanță: **{title}**")
+            st.write(f"Metodă: **{' + '.join(method_parts)}**")
+
+            try:
+                df_display = pd.DataFrame(
+                    st.session_state.matrix,
+                    columns=["Câmp", "Valoare"],
+                )
+                st.dataframe(df_display, use_container_width=True, hide_index=True)
+            except Exception:
+                st.write(st.session_state.matrix)
+
+            if partial:
+                partial_text = ", ".join(f"{k}={partial[k]}" for k in variables if k in partial) or "—"
+                st.info(f"Asignare parțială: {partial_text}")
+
+            if remaining_vars:
+                st.info("Variabile de completat: " + ", ".join(remaining_vars))
+
+            user_answer = st.text_area(
+                "✍️ Asignarea ta (ex: X=1, Y=2):",
+                key="single_csp_bt_answer",
+                height=120,
+            )
 
         else:  # Tower of Hanoi
             num_disks = (question.metadata.get("num_disks") if question else None) or st.session_state.game.num_disks
@@ -1286,6 +1392,49 @@ with col_right:
                 if details.get("missing"):
                     with st.expander("⏳ Noduri necolorate"):
                         st.write(", ".join(map(str, details["missing"])))
+
+                with st.expander("🔍 Vezi Soluția (Gold Standard)"):
+                    st.info(st.session_state.correct_expl)
+                    if question and getattr(question, "correct_answer", None):
+                        st.write(question.correct_answer)
+
+        elif problem_type == UI_LABEL_CSP_BT:
+            if st.button("✅ Verifică Răspunsul", type="primary"):
+                metadata = question.metadata if question else {}
+                csp_meta = metadata.get("csp") or {}
+                variables = list(csp_meta.get("variables") or [])
+                domains = dict(csp_meta.get("domains") or {})
+                partial = dict(metadata.get("partial_assignment") or {})
+
+                score, msg, details = evaluate_csp_backtracking_answer(
+                    st.session_state.get("single_csp_bt_answer", ""),
+                    variables=variables,
+                    domains=domains,
+                    partial_assignment=partial,
+                    expected_solution=getattr(question, "correct_answer", None) if question else None,
+                )
+
+                st.markdown(f"### Scor: **{score:.2f}%**")
+                if score >= 99.99:
+                    st.success(msg)
+                elif score >= 60:
+                    st.warning(msg)
+                else:
+                    st.error(msg)
+
+                if details.get("parse_errors"):
+                    with st.expander("⚠️ Probleme de parsare"):
+                        for err in details["parse_errors"]:
+                            st.write(f"- {err}")
+
+                if details.get("missing"):
+                    with st.expander("⏳ Variabile lipsă"):
+                        st.write(", ".join(map(str, details["missing"])))
+
+                if details.get("wrong"):
+                    with st.expander("❌ Variabile greșite (așteptat vs. primit)"):
+                        for var, info in details["wrong"].items():
+                            st.write(f"- {var}: așteptat `{info.get('expected')}`, primit `{info.get('got')}`")
 
                 with st.expander("🔍 Vezi Soluția (Gold Standard)"):
                     st.info(st.session_state.correct_expl)
