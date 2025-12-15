@@ -1,0 +1,79 @@
+{
+  "id": "demo_depth3_prune",
+  "title": "Demo mediu (pruning pe MAX și MIN)",
+  "description": "Arbore pe 3 niveluri interne; apar tăieri atât în noduri MAX (beta mic), cât și în noduri MIN (alpha mare).",
+  "traversal": "left-to-right",
+  "root": {
+    "type": "MAX",
+    "id": "R",
+    "children": [
+      {
+        "type": "MIN",
+        "id": "A",
+        "children": [
+          {
+            "type": "MAX",
+            "id": "A1",
+            "children": [
+              { "id": "L1", "value": 3 },
+              { "id": "L2", "value": 5 }
+            ]
+          },
+          {
+            "type": "MAX",
+            "id": "A2",
+            "children": [
+              { "id": "L3", "value": 6 },
+              { "id": "L4", "value": 9 }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "MIN",
+        "id": "B",
+        "children": [
+          {
+            "type": "MAX",
+            "id": "B1",
+            "children": [
+              { "id": "L5", "value": 1 },
+              { "id": "L6", "value": 2 }
+            ]
+          },
+          {
+            "type": "MAX",
+            "id": "B2",
+            "children": [
+              { "id": "L7", "value": 0 },
+              { "id": "L8", "value": -1 }
+            ]
+          }
+        ]
+      },
+      {
+        "type": "MIN",
+        "id": "C",
+        "children": [
+          {
+            "type": "MAX",
+            "id": "C1",
+            "children": [
+              { "id": "L9", "value": 4 },
+              { "id": "L10", "value": 7 }
+            ]
+          },
+          {
+            "type": "MAX",
+            "id": "C2",
+            "children": [
+              { "id": "L11", "value": 5 },
+              { "id": "L12", "value": 6 }
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+

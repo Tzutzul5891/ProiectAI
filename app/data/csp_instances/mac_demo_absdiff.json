@@ -1,0 +1,23 @@
+{
+  "id": "mac_demo_absdiff",
+  "title": "MAC / AC-3 intercalat (abs-diff)",
+  "description": "Constrangeri de tip |Xi - Xj| = 1 in lant + all-different, cu AC-3 intercalat (MAC).",
+  "variables": ["X1", "X2", "X3", "X4"],
+  "domains": {
+    "X1": [1, 2, 3, 4],
+    "X2": [1, 2, 3, 4],
+    "X3": [1, 2, 3, 4],
+    "X4": [1, 2, 3, 4]
+  },
+  "constraints": [
+    { "type": "all_different", "vars": ["X1", "X2", "X3", "X4"] },
+    { "type": "abs_diff_equals", "vars": ["X1", "X2"], "diff": 1 },
+    { "type": "abs_diff_equals", "vars": ["X2", "X3"], "diff": 1 },
+    { "type": "abs_diff_equals", "vars": ["X3", "X4"], "diff": 1 },
+    { "type": "less_than", "vars": ["X1", "X4"] }
+  ],
+  "partial_assignment": { "X2": 2 },
+  "method": "MRV/FC/AC-3",
+  "ac3_mode": "both"
+}
+

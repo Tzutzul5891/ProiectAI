@@ -553,3 +553,46 @@ def check_hanoi_validity(moves, pegs_state, num_disks, num_pegs, target_peg, opt
         detailed_feedback.append(f"📊 Ai efectuat {user_moves} mișcări până acum.")
         detailed_feedback.append(f"🎯 Continuă să muți discurile pe tija {peg_names[target_peg]}.")
         return False, False, "⏳ Puzzle incomplet", detailed_feedback, 0
+
+
+def graph_coloring_to_text(assignment: dict[int, str] | None) -> str:
+    if not assignment:
+        return ""
+    pairs = [f"{node}:{color}" for node, color in sorted(assignment.items(), key=lambda x: int(x[0]))]
+    return ", ".join(pairs)
+
+
+def render_interactive_graph_coloring(
+    *,
+    n: int,
+    color_names: list[str],
+    key_prefix: str = "graph_coloring",
+) -> dict[int, str]:
+    """Dropdown per nod (1..n) pentru o colorare a grafului."""
+
+    n = int(n)
+    colors = [str(c) for c in (color_names or []) if str(c).strip()]
+    params_key = f"{key_prefix}_params"
+    current_params = (n, tuple(colors))
+
+    if st.session_state.get(params_key) != current_params:
+        st.session_state[params_key] = current_params
+        for node in range(1, n + 1):
+            st.session_state.pop(f"{key_prefix}_node_{node}", None)
+
+    options = ["—"] + colors
+    cols_count = min(5, max(1, n))
+    cols = st.columns(cols_count)
+
+    assignment: dict[int, str] = {}
+    for idx, node in enumerate(range(1, n + 1)):
+        with cols[idx % cols_count]:
+            choice = st.selectbox(
+                f"Nod {node}",
+                options=options,
+                key=f"{key_prefix}_node_{node}",
+            )
+        if choice != "—":
+            assignment[node] = choice
+
+    return assignment
