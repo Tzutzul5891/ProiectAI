@@ -61,6 +61,24 @@ UI_LABEL_STRATEGY = "Teorie (Alegere Strategie)"
 UI_LABEL_ADVERSARIAL = "Adversarial (MinMax + Alpha-Beta)"
 
 
+def get_semantic_runtime_flags() -> tuple[bool, bool]:
+    """Return (use_sbert, offline_strict) from UI or env config."""
+
+    default_use_sbert = True
+    default_offline_strict = False
+    try:
+        default_use_sbert = bool(getattr(CONFIG, "enable_sbert", True))
+        default_offline_strict = bool(
+            getattr(CONFIG, "offline_strict", False) or getattr(CONFIG, "local_models_only", False)
+        )
+    except Exception:
+        pass
+
+    use_sbert = bool(st.session_state.get("setting_use_sbert", default_use_sbert))
+    offline_strict = bool(st.session_state.get("setting_offline_strict", default_offline_strict))
+    return use_sbert, offline_strict
+
+
 def build_prompt_text(ui_label: str, *, data, metadata: dict, fallback_game=None) -> str:
     """Keep prompts consistent with existing single-question UX/PDF wording."""
 
@@ -229,7 +247,13 @@ def evaluate_test_question(question, answer) -> tuple[float, str, dict]:
         if not user_text.strip():
             return 0.0, "Necompletat.", {}
 
-        score, feedback = evaluate_semantic(user_text, question.correct_explanation)
+        use_sbert, offline_strict = get_semantic_runtime_flags()
+        score, feedback = evaluate_semantic(
+            user_text,
+            question.correct_explanation,
+            use_sbert=use_sbert,
+            local_models_only=offline_strict,
+        )
         return float(score), str(feedback), {}
 
     if ui_label == UI_LABEL_NQUEENS:
@@ -250,7 +274,13 @@ def evaluate_test_question(question, answer) -> tuple[float, str, dict]:
         elif abs(queen_count - expected_queens) <= 2:
             partial_score += 15
 
-        semantic_score, _ = evaluate_semantic(board_to_text(board), question.correct_explanation)
+        use_sbert, offline_strict = get_semantic_runtime_flags()
+        semantic_score, _ = evaluate_semantic(
+            board_to_text(board),
+            question.correct_explanation,
+            use_sbert=use_sbert,
+            local_models_only=offline_strict,
+        )
         partial_score += min(float(semantic_score) * 0.2, 20.0)
 
         return float(partial_score), str(validity_msg), {"details": detailed_feedback}
@@ -505,6 +535,27 @@ with st.sidebar:
     st.header("⚙️ Configurare")
     app_mode = st.radio("Mod:", ("O singură întrebare", "Test (N întrebări)"), key="app_mode_select")
 
+    st.markdown("### 🌐 Offline / evaluare")
+    try:
+        default_offline_strict = bool(getattr(CONFIG, "offline_strict", False) or getattr(CONFIG, "local_models_only", False))
+        default_use_sbert = bool(getattr(CONFIG, "enable_sbert", True))
+    except Exception:
+        default_offline_strict = False
+        default_use_sbert = True
+
+    offline_strict_setting = st.checkbox(
+        "Offline strict (fără download modele)",
+        value=default_offline_strict,
+        key="setting_offline_strict",
+        help="Când e activ, evaluatoarele nu trebuie să descarce modele în runtime; dacă SBERT nu e disponibil local, se folosește un fallback determinist.",
+    )
+    use_sbert_setting = st.checkbox(
+        "Folosește SBERT (scor semantic)",
+        value=default_use_sbert,
+        key="setting_use_sbert",
+        help="Când e dezactivat, evaluarea folosește doar metode deterministe (exact/regex/algoritmic).",
+    )
+
     generate_test_clicked = False
     selected_test_topics: list[str] = []
     test_num_questions = 0
@@ -595,11 +646,12 @@ with st.sidebar:
             )
     
     st.info(
-        """
+        f"""
         **Info Proiect:**
-        Aplicație locală.
-        - **Backend:** Algoritmi deterministi.
-        - **Evaluare:** Model SBERT + Regex.
+        Aplicație locală (fără API-uri LLM în runtime).
+        - **Backend:** algoritmi deterministi.
+        - **Evaluare:** exact/regex/algoritmic + {'SBERT (semantic)' if use_sbert_setting else 'fără SBERT'}.
+        - **Offline strict:** {'ON' if offline_strict_setting else 'OFF'} (fără download modele).
         """
     )
     debug_mode = st.checkbox("🔧 Debug (arată `Question`/`TestSession`)", value=False)
@@ -1745,10 +1797,20 @@ with col_right:
                                 st.error("❌ Incorect: răspunsul nu indică lipsa unui echilibru Nash pur.")
                                 report_feedback = "Incorect: raspunsul nu indica lipsa unui echilibru Nash pur."
                     else:
-                        with st.spinner("AI-ul analizează răspunsul tău..."):
-                            score, feedback = evaluate_semantic(user_answer, st.session_state.correct_expl)
+                        use_sbert, offline_strict = get_semantic_runtime_flags()
+                        spinner_text = (
+                            "Se calculează scor semantic (SBERT)..." if use_sbert else "Se calculează scor lexical (fără SBERT)..."
+                        )
+                        with st.spinner(spinner_text):
+                            score, feedback = evaluate_semantic(
+                                user_answer,
+                                st.session_state.correct_expl,
+                                use_sbert=use_sbert,
+                                local_models_only=offline_strict,
+                            )
 
-                        st.markdown(f"### Scor Semantic: **{score:.2f}%**")
+                        score_label = "Scor semantic" if use_sbert else "Scor (determinist)"
+                        st.markdown(f"### {score_label}: **{score:.2f}%**")
 
                         if score > 75:
                             st.success(f"Feedback: {feedback}")
@@ -1802,8 +1864,17 @@ with col_right:
                         partial_score += 15
                     
                     # Semantic similarity for attempt (up to 20%)
-                    with st.spinner("AI-ul analizează răspunsul tău..."):
-                        semantic_score, _ = evaluate_semantic(user_answer, st.session_state.correct_expl)
+                    use_sbert, offline_strict = get_semantic_runtime_flags()
+                    spinner_text = (
+                        "Se calculează scor semantic (SBERT)..." if use_sbert else "Se calculează scor lexical (fără SBERT)..."
+                    )
+                    with st.spinner(spinner_text):
+                        semantic_score, _ = evaluate_semantic(
+                            user_answer,
+                            st.session_state.correct_expl,
+                            use_sbert=use_sbert,
+                            local_models_only=offline_strict,
+                        )
                     partial_score += min(semantic_score * 0.2, 20)
                     
                     st.markdown(f"### Scor Parțial: **{partial_score:.2f}%**")

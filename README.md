@@ -2,6 +2,13 @@
 
 SmarTest este o aplicație locală pentru generare de probleme tip examen și evaluare automată. Constrângere de design: **fără apeluri la API-uri LLM în runtime**; evaluarea și soluțiile sunt **locale/deterministe**.
 
+## 📌 Cerințe proiect (1–4) acoperite
+
+- **Cerința 1 — Teorie:** întrebări „Alegere Strategie” (strategie + justificare), cu evaluare exactă/parțială (`app/modules/strategy_choice.py`, `app/evaluator/strategy_choice.py`).
+- **Cerința 2 — Căutare:** N-Queens, Turul Calului, Turnurile din Hanoi, cu UI interactiv + evaluare deterministă (`app/modules/search.py`, `app/gui/components.py`).
+- **Cerința 3 — CSP:** CSP generic + Backtracking cu MRV / Forward Checking / AC-3 (instanțe JSON) (`app/modules/csp.py`, `app/evaluator/csp.py`, `app/data/csp_instances/*.json`).
+- **Cerința 4 — Adversarial:** MinMax + Alpha-Beta (valoare la rădăcină + frunze evaluate) pe arbori JSON (`app/modules/adversarial.py`, `app/evaluator/adversarial.py`, `app/data/adversarial_trees/*.json`).
+
 ## ✅ Implementat acum
 
 - **Generare probleme (local):**
@@ -213,13 +220,42 @@ Nu funcționează pentru scanări/poze/handwriting fără OCR.
 - Graph Coloring: `1:R, 2:G, 3:B` (acceptă și indici: `1:1, 2:2, ...` dacă sunt `k` culori)
 - MinMax + Alpha-Beta: `value=6 leaves=9` (acceptă și „valoare: 6”, „frunze: 9”)
 
+## 🔎 Exemple input/output (formate de răspuns)
+
+- **Nash (Text):** input `L1-C2. Explicație...` → output în UI: `Scor ...: XX.XX%` + `Feedback: ...`
+- **Nash (PDF):** input PDF cu `L1-C2, L2-C1` → output în UI: `Scor: XX.XX%` + detalii coordonate
+- **CSP (BT + FC/MRV/AC-3):** input `A=1, B=2, C=3` → output: `Scor: XX.XX%` + variabile greșite/lipsă
+- **Graph Coloring:** input `1:R, 2:G, 3:B` → output: `Scor: XX.XX%` + conflicte (dacă există)
+- **MinMax + Alpha-Beta:** input `value=6 leaves=9` → output: `Scor: XX.XX%` + diferențe (dacă există)
+
 ## ⚙️ Opțiuni offline / determinism
 
-- **Fără download de modele (offline strict):** `SMARTEST_LOCAL_MODELS_ONLY=1`
+- **Offline strict (fără download modele în runtime):** `SMARTEST_OFFLINE_STRICT=1` (alias: `SMARTEST_LOCAL_MODELS_ONLY=1`)
+- **Dezactivează SBERT complet (doar evaluare deterministă):** `SMARTEST_ENABLE_SBERT=0`
 - **Model SBERT local (path):** `SMARTEST_SBERT_MODEL=/cale/către/model`
 - **Generare reproductibilă (seed):** `SMARTEST_SEED=42`
 
-Evaluatorul semantic încearcă SBERT local; dacă nu poate încărca modelul, folosește un fallback lexical determinist.
+### Cum rulezi „offline strict”
+
+Fără SBERT (doar determinist):
+```bash
+SMARTEST_OFFLINE_STRICT=1 SMARTEST_ENABLE_SBERT=0 streamlit run main.py
+```
+
+Cu SBERT (doar dacă ai model local/cached):
+```bash
+SMARTEST_OFFLINE_STRICT=1 SMARTEST_ENABLE_SBERT=1 SMARTEST_SBERT_MODEL=/cale/către/model streamlit run main.py
+```
+
+În UI (sidebar) ai și toggle-uri pentru:
+- **Offline strict (fără download modele)**
+- **Folosește SBERT (scor semantic)**
+
+Evaluatorul semantic încearcă SBERT local (sau din cache); dacă nu poate încărca modelul sau dacă SBERT e dezactivat, folosește un fallback lexical determinist (exact/regex/algoritmic).
+
+## 🧾 Log interacțiuni agenți (doar dezvoltare)
+
+Pentru cerința „fără agenți conversaționali în runtime, dar păstrarea interacțiunilor din dezvoltare”, există un șablon de log în: `logs/agent_interactions.md`.
 
 ## 🗂️ Structură proiect
 
