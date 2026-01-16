@@ -1,0 +1,20 @@
+{
+  "id": "chain_3vars",
+  "title": "Lan de inegalitati (3 variabile)",
+  "description": "Exemplu mic: all-different + A<B<C, cu o asignare partiala.",
+  "variables": ["A", "B", "C"],
+  "domains": {
+    "A": [1, 2, 3],
+    "B": [1, 2, 3],
+    "C": [1, 2, 3]
+  },
+  "constraints": [
+    { "type": "all_different", "vars": ["A", "B", "C"] },
+    { "type": "less_than", "vars": ["A", "B"] },
+    { "type": "less_than", "vars": ["B", "C"] }
+  ],
+  "partial_assignment": { "B": 2 },
+  "method": "MRV/FC/AC-3",
+  "ac3_mode": "preprocess"
+}
+

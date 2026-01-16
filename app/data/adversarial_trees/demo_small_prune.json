@@ -1,0 +1,29 @@
+{
+  "id": "demo_small_prune",
+  "title": "Demo mic (pruning pe MIN)",
+  "description": "Rădăcină MAX cu 2 copii MIN; în al doilea MIN apare tăiere (beta <= alpha).",
+  "traversal": "left-to-right",
+  "root": {
+    "type": "MAX",
+    "id": "R",
+    "children": [
+      {
+        "type": "MIN",
+        "id": "A",
+        "children": [
+          { "id": "L1", "value": 3 },
+          { "id": "L2", "value": 5 }
+        ]
+      },
+      {
+        "type": "MIN",
+        "id": "B",
+        "children": [
+          { "id": "L3", "value": 2 },
+          { "id": "L4", "value": 9 }
+        ]
+      }
+    ]
+  }
+}
+

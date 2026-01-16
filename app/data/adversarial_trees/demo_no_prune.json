@@ -1,0 +1,29 @@
+{
+  "id": "demo_no_prune",
+  "title": "Demo (fără pruning)",
+  "description": "Arbore mic în care Alpha-Beta nu taie nimic (se evaluează toate frunzele).",
+  "traversal": "left-to-right",
+  "root": {
+    "type": "MAX",
+    "id": "R",
+    "children": [
+      {
+        "type": "MIN",
+        "id": "A",
+        "children": [
+          { "id": "L1", "value": 3 },
+          { "id": "L2", "value": 5 }
+        ]
+      },
+      {
+        "type": "MIN",
+        "id": "B",
+        "children": [
+          { "id": "L3", "value": 4 },
+          { "id": "L4", "value": 6 }
+        ]
+      }
+    ]
+  }
+}
+
